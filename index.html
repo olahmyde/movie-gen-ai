@@ -68,12 +68,29 @@
           <select id="film-select"></select>
         </label>
         <button class="btn btn--secondary" id="film-new" type="button">New film</button>
+        <button class="btn btn--text" id="rename-btn" type="button">Rename</button>
         <button class="btn btn--text" id="film-delete" type="button">Delete film</button>
       </div>
 
       <div class="cut__head">
-        <h1 id="cut-h">New film</h1>
-        <p class="cut__meta num" id="cut-meta"></p>
+        <div class="title">
+          <h1 id="cut-h">New film</h1>
+          <form class="title__edit" id="rename-form" hidden>
+            <label class="visually-hidden" for="rename-input">Film name</label>
+            <input type="text" id="rename-input" maxlength="80" required>
+            <button class="btn btn--primary" type="submit">Save name</button>
+            <button class="btn btn--text" type="button" id="rename-cancel">Cancel</button>
+          </form>
+        </div>
+        <div class="cut__side">
+          <p class="cut__meta num" id="cut-meta"></p>
+          <p class="cut__save" id="save-state" role="status"></p>
+        </div>
+      </div>
+
+      <div class="batch" id="batch" hidden>
+        <button class="btn btn--secondary" id="make-all" type="button">Make every scene</button>
+        <p class="hint" id="batch-hint">Makes the voices, then the clip, for every scene still missing one. You can keep editing while it runs.</p>
       </div>
 
       <div class="empty" id="empty">
@@ -112,6 +129,66 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
+  <dialog class="picker" id="voice-dialog" aria-labelledby="picker-h">
+    <div class="picker__head">
+      <h2 id="picker-h">Choose a voice</h2>
+      <button class="btn btn--secondary" type="button" id="picker-done">Done</button>
+    </div>
+    <div class="picker__filters">
+      <fieldset class="field">
+        <legend>Voice</legend>
+        <div class="seg seg--3">
+          <label><input type="radio" name="f-gender" value="" checked><span>Any</span></label>
+          <label><input type="radio" name="f-gender" value="woman"><span>Woman</span></label>
+          <label><input type="radio" name="f-gender" value="man"><span>Man</span></label>
+        </div>
+      </fieldset>
+      <fieldset class="field">
+        <legend>Age</legend>
+        <div class="seg seg--5">
+          <label><input type="radio" name="f-age" value="" checked><span>Any</span></label>
+          <label><input type="radio" name="f-age" value="child"><span>Child</span></label>
+          <label><input type="radio" name="f-age" value="young"><span>Young</span></label>
+          <label><input type="radio" name="f-age" value="adult"><span>Adult</span></label>
+          <label><input type="radio" name="f-age" value="older"><span>Older</span></label>
+        </div>
+      </fieldset>
+    </div>
+    <p class="hint">Ages are by ear, so play a voice before you choose it.</p>
+    <ul class="picker__list" id="voice-list"></ul>
+    <p class="picker__empty" id="voice-empty" hidden></p>
+
+    <details class="clone" id="clone">
+      <summary>Clone a voice from a recording</summary>
+      <form class="clone__form" id="clone-form">
+        <label class="field">
+          <span>Recording, 10 to 20 seconds of one person talking</span>
+          <input type="file" name="file" accept="audio/*" required>
+        </label>
+        <label class="field">
+          <span>Name for this voice</span>
+          <input type="text" name="name" maxlength="40" required>
+        </label>
+        <div class="clone__row">
+          <label class="field">
+            <span>Voice</span>
+            <select name="gender" required><option value="woman">Woman</option><option value="man">Man</option></select>
+          </label>
+          <label class="field">
+            <span>Age</span>
+            <select name="age" required><option value="child">Child</option><option value="young">Young</option><option value="adult" selected>Adult</option><option value="older">Older</option></select>
+          </label>
+        </div>
+        <label class="check">
+          <input type="checkbox" name="consent" value="yes" required>
+          <span>I have this person’s permission to copy their voice (a parent’s, for a child).</span>
+        </label>
+        <button class="btn btn--primary" type="submit" id="clone-btn">Add voice</button>
+        <p class="hint" id="clone-hint">The voice appears in the list once it’s added.</p>
+      </form>
+    </details>
+  </dialog>
+
   <template id="screen-tpl">
     <div class="screen__frame">
       <div class="screen__empty">No clip yet</div>
@@ -137,16 +214,23 @@
           <textarea rows="3" data-shot></textarea>
         </label>
         <ul class="lines" data-lines></ul>
-        <div class="scene__acts">
-          <div class="act">
-            <button class="btn btn--secondary" type="button" data-act="voice">Make voices</button>
-            <p class="status" data-voice-status>Voices not made</p>
+        <dl class="tasks">
+          <div class="task" data-task="voice">
+            <dt>Voices</dt>
+            <dd class="task__state" data-voice-status>Not made yet</dd>
+            <dd class="task__acts">
+              <button class="btn btn--text" type="button" data-play-voice hidden>Play</button>
+              <button class="btn btn--secondary" type="button" data-act="voice">Make voices</button>
+            </dd>
           </div>
-          <div class="act">
-            <button class="btn btn--secondary" type="button" data-act="clip">Make clip</button>
-            <p class="status" data-clip-status>Clip not made</p>
+          <div class="task" data-task="clip">
+            <dt>Clip</dt>
+            <dd class="task__state" data-clip-status>Not made yet</dd>
+            <dd class="task__acts">
+              <button class="btn btn--secondary" type="button" data-act="clip">Make clip</button>
+            </dd>
           </div>
-        </div>
+        </dl>
       </div>
     </li>
   </template>

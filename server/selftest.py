@@ -20,9 +20,9 @@ base = "http://localhost:8765"
 jar = http.cookiejar.CookieJar()
 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
-def req(path, body=None, ctype="application/json", opener=op):
+def req(path, body=None, ctype="application/json", opener=op, method=None):
     data = None if body is None else (json.dumps(body).encode() if ctype == "application/json" else body)
-    r = urllib.request.Request(base + path, data, {"Content-Type": ctype} if data is not None else {})
+    r = urllib.request.Request(base + path, data, {"Content-Type": ctype} if data is not None else {}, method=method)
     try:
         with opener.open(r, timeout=60) as resp:
             raw = resp.read()
@@ -47,6 +47,37 @@ try:
     assert s == 200 and r["email"] == "test@example.test", r
     assert req("/api/me")[1]["email"] == "test@example.test"
     assert req("/api/gpu")[1]["state"] == "running"
+
+    s, vs = req("/api/voices")
+    ids = [v["id"] for v in vs["voices"]]
+    assert "kokoro:af_heart" in ids and "cb:default" in ids, ids
+    assert req("/api/voice/sample", {"voice": "cb:../../users"})[0] == 400, "unknown voices are refused"
+    s, smp = req("/api/voice/sample", {"voice": "kokoro:bm_george"})
+    assert s == 200 and smp["url"].endswith(".wav"), smp
+
+    # films are saved on the server and shared
+    fid = "0b9c1a2e-1111-4a4a-9f9f-123456789abc"
+    s, sv = req(f"/api/films/{fid}", {"id": fid, "title": "Test film", "scenes": []}, method="PUT")
+    assert s == 200 and sv["updatedAt"], sv
+    assert any(f["id"] == fid and f["title"] == "Test film" for f in req("/api/films")[1]["films"])
+    assert req("/api/films/..%2Fusers", {"id": "../users"}, method="PUT")[0] != 200, "no writing outside films/"
+    req(f"/api/films/{fid}", method="DELETE")
+    assert not req("/api/films")[1]["films"]
+
+    # a cloned voice joins the list with its tags; consent is required
+    wav = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=220:duration=3", "-f", "wav", "-"], capture_output=True, check=True).stdout
+    def multipart(fields, file):
+        b = "----mgtest"
+        parts = [f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode() for k, v in fields.items()]
+        parts.append(f'--{b}\r\nContent-Disposition: form-data; name="file"; filename="v.wav"\r\nContent-Type: audio/wav\r\n\r\n'.encode() + file + b"\r\n")
+        return b"".join(parts) + f"--{b}--\r\n".encode(), f"multipart/form-data; boundary={b}"
+    body, ct = multipart({"name": "Grandad", "gender": "man", "age": "older"}, wav)
+    assert req("/api/voices/clone", body, ct)[0] == 400, "consent is required"
+    body, ct = multipart({"name": "Grandad", "gender": "man", "age": "older", "consent": "yes"}, wav)
+    s, cl = req("/api/voices/clone", body, ct)
+    assert s == 200 and cl["id"] == "cb:grandad", cl
+    g = next(v for v in req("/api/voices")[1]["voices"] if v["id"] == "cb:grandad")
+    assert g["gender"] == "man" and g["age"] == "older", g
 
     s, film = req("/api/script", {"idea": "A keeper finds a letter.", "seconds": 12, "look": "Night"})
     assert s == 200 and len(film["scenes"]) == 3 and film["scenes"][1]["start"] == film["scenes"][0]["dur"], film

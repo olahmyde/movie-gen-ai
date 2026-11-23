@@ -11,12 +11,11 @@ const api = (() => {
   } catch {}
   const demo = !location.hostname.endsWith(".proxy.runpod.net") && !forced;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  const voices = ["Warm, low", "Bright, quick", "Older, gravel", "Soft, close"];
   const SESSION = "moviegen:session"; // a routing hint only; the server's cookie is the real check
 
-  async function call(path, body) {
-    const r = await fetch(path, body === undefined ? { credentials: "same-origin" } : {
-      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  async function call(path, body, method) {
+    const r = await fetch(path, body === undefined ? { method: method || "GET", credentials: "same-origin" } : {
+      method: method || "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
     if (r.status === 401 && !path.endsWith("/login")) {
       try { sessionStorage.removeItem(SESSION); } catch {}
@@ -37,6 +36,17 @@ const api = (() => {
     gpuStatus: () => call("/api/gpu"),
     async gpuStart() { return call("/api/gpu"); }, // if this page loads, the pod is already running
     async gpuStop() { await call("/api/gpu/stop", {}); return { state: "stopped" }; },
+    listVoices: () => call("/api/voices"),
+    voiceSample: async (voice) => (await call("/api/voice/sample", { voice })).url,
+    async cloneVoice(form) { // form: FormData with file, name, gender, age, consent
+      const r = await fetch("/api/voices/clone", { method: "POST", credentials: "same-origin", body: form });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `The server answered ${r.status}.`);
+      return data.id;
+    },
+    listFilms: async () => (await call("/api/films")).films,
+    saveFilm: (f) => call(`/api/films/${f.id}`, f, "PUT"),
+    deleteFilm: (id) => call(`/api/films/${id}`, undefined, "DELETE"),
     writeScript: (o) => call("/api/script", o),
     makeVoices: (scene, cast) => call("/api/voice", { lines: scene.lines, cast }),
     async makeClip(scene, onProgress, look) {
@@ -64,12 +74,33 @@ const api = (() => {
       try { sessionStorage.setItem(SESSION, email); } catch {}
     },
     signOut() { try { sessionStorage.removeItem(SESSION); } catch {} },
+    async listVoices() {
+      const v = [["kokoro:af_heart", "Heart", "woman", "adult", "American"], ["kokoro:af_sky", "Sky", "woman", "young", "American"],
+        ["kokoro:am_michael", "Michael", "man", "adult", "American"], ["kokoro:am_santa", "Santa", "man", "older", "American"],
+        ["kokoro:bf_emma", "Emma", "woman", "adult", "British"], ["kokoro:bm_george", "George", "man", "older", "British"],
+        ["cb:default", "Chatterbox", "woman", "adult", "American"]];
+      return { voices: v.map(([id, name, gender, age, accent]) => ({ id, name, gender, age, accent, engine: id.startsWith("cb") ? "Chatterbox" : "Kokoro" })),
+        default: ["kokoro:af_heart", "kokoro:am_michael", "kokoro:bf_emma", "kokoro:bm_george"] };
+    },
+    async voiceSample() { return null; }, // demo: the browser's own speech stands in
+    async cloneVoice() { throw new Error("Cloning needs the GPU server; it isn't available in demo mode."); },
+    // Demo films live in this browser only; on the pod they're saved on the server for everyone.
+    async listFilms() { try { return JSON.parse(localStorage.getItem("moviegen:demo-films")) || []; } catch { return []; } },
+    async saveFilm(f) {
+      const all = (await this.listFilms()).filter((x) => x.id !== f.id);
+      const updatedAt = Date.now();
+      try { localStorage.setItem("moviegen:demo-films", JSON.stringify([{ ...f, updatedAt }, ...all])); } catch {}
+      return { updatedAt };
+    },
+    async deleteFilm(id) {
+      try { localStorage.setItem("moviegen:demo-films", JSON.stringify((await this.listFilms()).filter((x) => x.id !== id))); } catch {}
+    },
     async gpuStatus() { return { ...gpu }; },
     async gpuStart() { gpu.state = "starting"; await wait(2500); gpu = { ...gpu, state: "running", startedAt: Date.now() }; return { ...gpu }; },
     async gpuStop() { await wait(600); gpu = { ...gpu, state: "stopped", startedAt: null }; return { ...gpu }; },
     async writeScript({ idea, seconds, look }) {
       await wait(1800);
-      const cast = [{ name: "Ada", voice: voices[0] }, { name: "Marcus", voice: voices[2] }];
+      const cast = [{ name: "Ada", voice: "kokoro:af_heart" }, { name: "Marcus", voice: "kokoro:am_michael" }];
       const beats = ["Arrival", "Recognition", "The old question", "What changed", "The offer", "Silence", "The answer", "Turning away", "Second thought", "Last light"];
       let t = 0;
       const scenes = splitScenes(seconds).map((dur, i) => {
@@ -94,7 +125,7 @@ const api = (() => {
 
   return {
     demo,
-    voices,
+
     session() { try { return sessionStorage.getItem(SESSION); } catch { return null; } },
     ...(demo ? mock : real),
   };

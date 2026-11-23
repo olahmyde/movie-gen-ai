@@ -32,15 +32,53 @@ STARTED = time.time()
 for d in (FILES, VOICES):
     d.mkdir(parents=True, exist_ok=True)
 
-# Voice presets: Chatterbox has one built-in voice; these tune its delivery.
-# Drop a 10-second sample at voices/<slug>.wav to clone a real voice for that preset.
-PRESETS = {
-    "Warm, low": dict(exaggeration=0.4, cfg_weight=0.5),
-    "Bright, quick": dict(exaggeration=0.7, cfg_weight=0.3),
-    "Older, gravel": dict(exaggeration=0.3, cfg_weight=0.6),
-    "Soft, close": dict(exaggeration=0.25, cfg_weight=0.5),
+# Voices. Kokoro gives distinct ready-made voices; Chatterbox is the most expressive and
+# clones any 10-second recording dropped into voices/ (the file name becomes the voice name).
+# Kokoro's English voices: id -> (name, gender, age). Ages are by ear (young, adult, older);
+# no open model ships a child's voice, so children come from cloned recordings.
+KOKORO = {
+    "af_heart": ("Heart", "woman", "adult"), "af_alloy": ("Alloy", "woman", "adult"), "af_aoede": ("Aoede", "woman", "adult"),
+    "af_bella": ("Bella", "woman", "young"), "af_jessica": ("Jessica", "woman", "young"), "af_kore": ("Kore", "woman", "adult"),
+    "af_nicole": ("Nicole", "woman", "young"), "af_nova": ("Nova", "woman", "adult"), "af_river": ("River", "woman", "adult"),
+    "af_sarah": ("Sarah", "woman", "adult"), "af_sky": ("Sky", "woman", "young"),
+    "am_adam": ("Adam", "man", "adult"), "am_echo": ("Echo", "man", "adult"), "am_eric": ("Eric", "man", "adult"),
+    "am_fenrir": ("Fenrir", "man", "adult"), "am_liam": ("Liam", "man", "young"), "am_michael": ("Michael", "man", "adult"),
+    "am_onyx": ("Onyx", "man", "older"), "am_puck": ("Puck", "man", "young"), "am_santa": ("Santa", "man", "older"),
+    "bf_alice": ("Alice", "woman", "adult"), "bf_emma": ("Emma", "woman", "adult"), "bf_isabella": ("Isabella", "woman", "young"),
+    "bf_lily": ("Lily", "woman", "young"), "bm_daniel": ("Daniel", "man", "older"), "bm_fable": ("Fable", "man", "young"),
+    "bm_george": ("George", "man", "older"), "bm_lewis": ("Lewis", "man", "adult"),
 }
-slug = lambda s: "".join(c if c.isalnum() else "-" for c in s.lower()).strip("-")
+DEFAULT_CAST = ["kokoro:af_heart", "kokoro:am_michael", "kokoro:bf_emma", "kokoro:bm_george"]
+SAMPLE_TEXT = "I found your letter on the rocks this morning. It was written in my own hand."
+GENDERS, AGES = ("woman", "man"), ("child", "young", "adult", "older")
+slug = lambda s: "".join(c if c.isalnum() else "-" for c in s.lower()).strip("-")[:40]
+
+def voices():
+    out = [{"id": f"kokoro:{k}", "name": n, "gender": g, "age": a, "accent": "American" if k[0] == "a" else "British", "engine": "Kokoro"}
+           for k, (n, g, a) in KOKORO.items()]
+    out.append({"id": "cb:default", "name": "Chatterbox", "gender": "woman", "age": "adult", "accent": "American", "engine": "Chatterbox"})
+    for p in sorted(VOICES.glob("*.wav")):
+        meta = json.loads(p.with_suffix(".json").read_text()) if p.with_suffix(".json").exists() else {}
+        out.append({"id": f"cb:{p.stem}", "name": meta.get("name", p.stem), "gender": meta.get("gender", ""), "age": meta.get("age", ""),
+                    "accent": "", "engine": "Cloned"})
+    return out
+
+def add_clone(name, gender, age, upload):
+    """Save an uploaded recording as a cloned voice: 24 kHz mono, the first 20 seconds."""
+    sl = slug(name)
+    if not sl or sl == "default":
+        raise ValueError("Give the voice a name.")
+    raw = VOICES / f"{sl}.upload"
+    raw.write_bytes(upload)
+    try:
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(raw), "-t", "20", "-ac", "1", "-ar", "24000", str(VOICES / f"{sl}.wav")], check=True)
+    except subprocess.CalledProcessError:
+        raise ValueError("That file isn't audio we can read. Try an MP3, WAV or M4A.")
+    finally:
+        raw.unlink(missing_ok=True)
+    (VOICES / f"{sl}.json").write_text(json.dumps({"name": name.strip()[:40], "gender": gender, "age": age}))
+    (FILES / f"sample-cb-{sl}.wav").unlink(missing_ok=True)  # a re-upload replaces the cached sample
+    return f"cb:{sl}"
 
 
 # ---------- users and sessions ----------
@@ -133,6 +171,7 @@ def write_script(idea, seconds, look):
     n = max(2, math.ceil(seconds / 5))            # Wan renders up to 5 s a clip, so a scene is at most 5 s
     dur = max(2, round(seconds / n))
     if FAKE:
+        time.sleep(float(os.environ.get("MOVIEGEN_FAKE_DELAY", "0")))
         out = {"title": idea[:40], "cast": [{"name": "Ada"}, {"name": "Marcus"}],
                "scenes": [{"title": f"Scene {i + 1}", "shot": idea, "lines": [{"who": "Ada", "text": "Test line."}]} for i in range(n)]}
     else:
@@ -144,8 +183,7 @@ def write_script(idea, seconds, look):
                                              "options": {"temperature": 0.8}, "keep_alive": 0,
                                              "messages": [{"role": "user", "content": prompt}]})
         out = json.loads(r["message"]["content"])
-    names = list(PRESETS)
-    cast = [{"name": c["name"], "voice": names[i % len(names)]} for i, c in enumerate(out["cast"][:4])]
+    cast = [{"name": c["name"], "voice": DEFAULT_CAST[i % len(DEFAULT_CAST)]} for i, c in enumerate(out["cast"][:4])]
     scenes, t = [], 0
     for s in out["scenes"][:n]:
         scenes.append({"id": uuid.uuid4().hex, "title": s["title"], "shot": s["shot"], "lines": s["lines"][:2], "start": t, "dur": dur})
@@ -153,32 +191,58 @@ def write_script(idea, seconds, look):
     return {"title": out["title"], "cast": cast, "scenes": scenes}
 
 
-# ---------- voices (Chatterbox) ----------
+# ---------- voices (Kokoro and Chatterbox, both 24 kHz) ----------
 
-_tts = None
-def tts():
-    global _tts
-    if _tts is None:
-        from chatterbox.tts import ChatterboxTTS
-        _tts = ChatterboxTTS.from_pretrained(device="cuda")
-    return _tts
+SR = 24000
+_models = {}
+def model(name):
+    if name not in _models:
+        if name == "chatterbox":
+            from chatterbox.tts import ChatterboxTTS
+            _models[name] = ChatterboxTTS.from_pretrained(device="cuda")
+        else:  # kokoro-a (American) or kokoro-b (British)
+            from kokoro import KPipeline
+            _models[name] = KPipeline(lang_code=name[-1], repo_id="hexgrad/Kokoro-82M")
+    return _models[name]
+
+def speak(text, voice):
+    """One line in one voice, as a 1-D float tensor at 24 kHz."""
+    import torch
+    if voice not in {v["id"] for v in voices()}:
+        voice = DEFAULT_CAST[0]  # unknown, or a film saved before voices had ids
+    engine, name = voice.split(":", 1)
+    if engine == "kokoro":
+        pipe = model(f"kokoro-{name[0]}")
+        return torch.cat([torch.as_tensor(a).flatten().float() for _, _, a in pipe(text, voice=name)])
+    ref = VOICES / f"{name}.wav"
+    wav = model("chatterbox").generate(text, audio_prompt_path=str(ref) if ref.exists() else None, exaggeration=0.5, cfg_weight=0.5)
+    return wav.flatten().float()
+
+def save_wav(parts, out):
+    import torch, torchaudio
+    torchaudio.save(str(out), torch.cat(parts).unsqueeze(0), SR)
+    return out
+
+def fake_wav(out, seconds=2):
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"sine=frequency=330:duration={seconds}", str(out)], check=True)
+    return out
 
 def make_voice(lines, cast):
     voice_of = {c["name"]: c.get("voice") for c in cast}
     out = FILES / f"{uuid.uuid4().hex}.wav"
     if FAKE:
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=330:duration=2", str(out)], check=True)
-        return out
-    import torch, torchaudio
-    model = tts()
+        return fake_wav(out)
+    import torch
     parts = []
     for l in lines:
-        preset = voice_of.get(l["who"]) or "Warm, low"
-        ref = VOICES / f"{slug(preset)}.wav"
-        wav = model.generate(l["text"], audio_prompt_path=str(ref) if ref.exists() else None, **PRESETS.get(preset, {}))
-        parts += [wav, torch.zeros(1, int(model.sr * 0.3))]
-    torchaudio.save(str(out), torch.cat(parts, dim=1), model.sr)
-    return out
+        parts += [speak(l["text"], voice_of.get(l["who"])), torch.zeros(int(SR * 0.3))]
+    return save_wav(parts, out)
+
+def voice_sample(voice):
+    out = FILES / f"sample-{slug(voice)}.wav"   # cached: a voice always sounds the same
+    if out.exists():
+        return out
+    return fake_wav(out) if FAKE else save_wav([speak(SAMPLE_TEXT, voice)], out)
 
 
 # ---------- clips (ComfyUI, Wan 2.2 TI2V 5B) ----------
@@ -284,7 +348,9 @@ url_of = lambda p: f"/files/{p.name}"
 @app.middleware("http")
 async def json_only_writes(request: Request, call_next):
     # A cross-site form can't send JSON, so this plus SameSite cookies blocks CSRF.
-    if request.method == "POST" and request.url.path.startswith("/api/") and "application/json" not in request.headers.get("content-type", ""):
+    # The one upload route takes a file, and its session cookie is SameSite=Strict.
+    if (request.method in ("POST", "PUT") and request.url.path.startswith("/api/") and request.url.path != "/api/voices/clone"
+            and "application/json" not in request.headers.get("content-type", "")):
         return Response('{"detail":"Send JSON."}', 415, media_type="application/json")
     return await call_next(request)
 
@@ -350,6 +416,74 @@ def voice(body: dict, request: Request):
     if not lines:
         raise HTTPException(400, "This scene has no lines to voice.")
     return {"url": url_of(run_now("voice", lambda j: make_voice(lines, body.get("cast", []))))}
+
+@app.get("/api/voices")
+def list_voices(request: Request):
+    user(request)
+    return {"voices": voices(), "default": DEFAULT_CAST}
+
+@app.post("/api/voice/sample")
+def sample(body: dict, request: Request):
+    user(request)
+    voice = str(body.get("voice", ""))
+    if voice not in {v["id"] for v in voices()}:
+        raise HTTPException(400, "Pick a voice from the list.")
+    return {"url": url_of(run_now("voice", lambda j: voice_sample(voice)))}
+
+@app.post("/api/voices/clone")
+async def clone(request: Request):
+    user(request)
+    form = await request.form()
+    f, name = form.get("file"), str(form.get("name", "")).strip()
+    gender, age = str(form.get("gender", "")), str(form.get("age", ""))
+    if form.get("consent") != "yes":
+        raise HTTPException(400, "Confirm you have the speaker's permission (a parent's, for a child).")
+    if gender not in GENDERS or age not in AGES:
+        raise HTTPException(400, "Pick who the voice is: woman or man, and an age.")
+    if not f or not hasattr(f, "read"):
+        raise HTTPException(400, "Choose a recording.")
+    data = await f.read()
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(413, "Keep the recording under 15 MB; 10 to 20 seconds is plenty.")
+    try:
+        return {"id": add_clone(name, gender, age, data)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ---------- films: one JSON file each, shared by everyone who signs in ----------
+
+FILMS = DATA / "films"
+FILMS.mkdir(parents=True, exist_ok=True)
+film_path = lambda fid: FILMS / f"{fid}.json" if fid.replace("-", "").isalnum() and len(fid) <= 64 else None
+
+@app.get("/api/films")
+def films_list(request: Request):
+    user(request)
+    films = [json.loads(p.read_text()) for p in FILMS.glob("*.json")]
+    return {"films": sorted(films, key=lambda f: f.get("updatedAt", 0), reverse=True)}
+
+@app.put("/api/films/{fid}")
+def films_save(fid: str, body: dict, request: Request):
+    who = user(request)
+    p = film_path(fid)
+    if not p or body.get("id") != fid:
+        raise HTTPException(400, "That film id isn't valid.")
+    raw = json.dumps({**body, "updatedAt": int(time.time() * 1000), "updatedBy": who})
+    if len(raw) > 2_000_000:
+        raise HTTPException(413, "This film is too large to save.")
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(raw)
+    tmp.replace(p)  # never leave a half-written film behind
+    return {"updatedAt": json.loads(raw)["updatedAt"]}
+
+@app.delete("/api/films/{fid}")
+def films_delete(fid: str, request: Request):
+    user(request)
+    p = film_path(fid)
+    if p:
+        p.unlink(missing_ok=True)
+    return {}
 
 @app.post("/api/clip")
 def clip(body: dict, request: Request):
