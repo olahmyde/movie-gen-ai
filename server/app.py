@@ -115,18 +115,20 @@ def user(request: Request):
 
 # ---------- the GPU queue ----------
 
+# Two lanes: voices are small enough to run beside a video render, so a voice sample never
+# waits behind a 2-minute clip. Scripts, clips and movie builds share the heavy lane.
 JOBS = {}
-WORK = queue.Queue()
+LANES = {"heavy": queue.Queue(), "voice": queue.Queue()}
 
 def submit(kind, fn):
     job = {"id": uuid.uuid4().hex[:12], "kind": kind, "state": "queued", "progress": 0.0, "result": None, "error": None, "done": threading.Event()}
     JOBS[job["id"]] = job
-    WORK.put((job, fn))
+    LANES["voice" if kind == "voice" else "heavy"].put((job, fn))
     return job
 
-def worker():
+def worker(lane):
     while True:
-        job, fn = WORK.get()
+        job, fn = LANES[lane].get()
         job["state"] = "busy"
         try:
             job["result"] = fn(job)
@@ -178,7 +180,9 @@ def write_script(idea, seconds, look):
         prompt = (f"Write a short film of exactly {n} scenes, each about {dur} seconds on screen. Idea: {idea}\n"
                   f"Visual look: {look}.\nFor each scene give a short title, a one-paragraph shot description a video model "
                   f"can render (subject, action, setting, camera, light; no dialogue in it), and at most one or two short spoken "
-                  f"lines that fit in {dur} seconds. Two to four characters. Title the film in five words or fewer.")
+                  f"lines that fit in {dur} seconds. When a scene has a line, its shot must show that character on camera, "
+                  f"facing us and speaking it; a scene with nobody speaking has no lines. Two to four characters, and describe "
+                  f"each character's look the same way in every shot (age, hair, clothes). Title the film in five words or fewer.")
         r = post_json(f"{OLLAMA}/api/chat", {"model": LLM, "stream": False, "think": False, "format": SCRIPT_SCHEMA,
                                              "options": {"temperature": 0.8}, "keep_alive": 0,
                                              "messages": [{"role": "user", "content": prompt}]})
@@ -253,7 +257,10 @@ def voice_sample(voice):
 
 NEGATIVE = "blurry, low quality, distorted faces, extra limbs, text, watermark, subtitles, static frame"
 
-def wan_workflow(prompt, frames, seed):
+SIZES = {"draft": (832, 480), "final": (1280, 704)}  # draft renders about 3x faster
+
+def wan_workflow(prompt, frames, seed, quality="draft"):
+    width, height = SIZES.get(quality, SIZES["draft"])
     return {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan2.2_ti2v_5B_fp16.safetensors", "weight_dtype": "default"}},
         "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "type": "wan", "device": "default"}},
@@ -261,7 +268,7 @@ def wan_workflow(prompt, frames, seed):
         "4": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["1", 0], "shift": 8}},
         "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
         "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": NEGATIVE}},
-        "7": {"class_type": "Wan22ImageToVideoLatent", "inputs": {"vae": ["3", 0], "width": 1280, "height": 704, "length": frames, "batch_size": 1}},
+        "7": {"class_type": "Wan22ImageToVideoLatent", "inputs": {"vae": ["3", 0], "width": width, "height": height, "length": frames, "batch_size": 1}},
         "8": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["7", 0],
                                                     "seed": seed, "steps": 20, "cfg": 5, "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1}},
         "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
@@ -269,20 +276,20 @@ def wan_workflow(prompt, frames, seed):
         "11": {"class_type": "SaveVideo", "inputs": {"video": ["10", 0], "filename_prefix": "moviegen/clip", "format": "mp4", "codec": "auto"}},
     }
 
-CLIP_SECONDS_EXPECTED = 240  # ponytail: progress is time-based; read ComfyUI's websocket if a real bar matters
+CLIP_SECONDS_EXPECTED = {"draft": 80, "final": 240}  # ponytail: time-based progress; ComfyUI's websocket would be exact
 
-def make_clip(job, shot, look, seconds):
+def make_clip(job, shot, look, seconds, quality="draft"):
     frames = min(121, int(seconds * 24) + 1)
     out = FILES / f"{uuid.uuid4().hex}.mp4"
     if FAKE:
         subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc=size=640x352:rate=24:duration={seconds}",
                         "-pix_fmt", "yuv420p", str(out)], check=True)
         return out
-    pid = post_json(f"{COMFY}/prompt", {"prompt": wan_workflow(f"{look}. {shot}", frames, secrets.randbelow(2**32))})["prompt_id"]
+    pid = post_json(f"{COMFY}/prompt", {"prompt": wan_workflow(f"{look}. {shot}", frames, secrets.randbelow(2**32), quality)})["prompt_id"]
     t0 = time.time()
     while True:
         time.sleep(3)
-        job["progress"] = min(0.95, (time.time() - t0) / CLIP_SECONDS_EXPECTED)
+        job["progress"] = min(0.95, (time.time() - t0) / CLIP_SECONDS_EXPECTED.get(quality, 80))
         h = get_json(f"{COMFY}/history/{pid}").get(pid)
         if not h:
             continue
@@ -315,6 +322,7 @@ def build_movie(scenes):
         part = FILES / f"part-{uuid.uuid4().hex}.mp4"
         audio = ["-i", str(voice)] if voice else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
         subprocess.run(["ffmpeg", "-loglevel", "error", "-i", str(clip), *audio, "-map", "0:v", "-map", "1:a", "-af", "apad",
+                        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1",
                         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-shortest", str(part)], check=True)
         parts.append(part)
     listing = FILES / f"list-{uuid.uuid4().hex}.txt"
@@ -338,7 +346,7 @@ def stop_pod():
 def idle_watch():
     while True:
         time.sleep(60)
-        if WORK.empty() and not any(j["state"] == "busy" for j in JOBS.values()) and time.time() - last_activity > IDLE_STOP_MIN * 60:
+        if all(q.empty() for q in LANES.values()) and not any(j["state"] == "busy" for j in JOBS.values()) and time.time() - last_activity > IDLE_STOP_MIN * 60:
             print(f"idle for {IDLE_STOP_MIN} min, stopping the pod", flush=True)
             if stop_pod():
                 return
@@ -494,7 +502,8 @@ def clip(body: dict, request: Request):
     user(request)
     shot, look = str(body.get("shot", ""))[:1500], str(body.get("look", ""))[:100]
     seconds = min(max(float(body.get("seconds", 5)), 1), 5)
-    job = submit("clip", lambda j: make_clip(j, shot, look, seconds))
+    quality = "final" if body.get("quality") == "final" else "draft"
+    job = submit("clip", lambda j: make_clip(j, shot, look, seconds, quality))
     return {"id": job["id"]}
 
 @app.get("/api/clip/{job_id}")
@@ -549,7 +558,8 @@ if __name__ == "__main__":
     if sys.argv[1:2] == ["adduser"] and len(sys.argv) == 3:
         adduser(sys.argv[2])
         sys.exit()
-    threading.Thread(target=worker, daemon=True).start()
+    for lane in LANES:
+        threading.Thread(target=worker, args=(lane,), daemon=True).start()
     threading.Thread(target=idle_watch, daemon=True).start()
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), proxy_headers=True, forwarded_allow_ips="*")

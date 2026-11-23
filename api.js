@@ -49,8 +49,8 @@ const api = (() => {
     deleteFilm: (id) => call(`/api/films/${id}`, undefined, "DELETE"),
     writeScript: (o) => call("/api/script", o),
     makeVoices: (scene, cast) => call("/api/voice", { lines: scene.lines, cast }),
-    async makeClip(scene, onProgress, look) {
-      const { id } = await call("/api/clip", { shot: scene.shot, look, seconds: scene.dur });
+    async makeClip(scene, onProgress, look, quality) {
+      const { id } = await call("/api/clip", { shot: scene.shot, look, seconds: scene.dur, quality });
       for (;;) {
         await wait(3000);
         const j = await call(`/api/clip/${id}`);

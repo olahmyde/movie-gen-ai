@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MovieGenAI</title>
+  <title>MovieGenAI Studio</title>
   <meta name="description" content="Private studio: idea to script, voices, clips and a finished movie.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,85 +12,128 @@
 </head>
 <body>
   <header class="bar">
-    <a class="mark" href="./" aria-label="MovieGenAI home">
+    <a class="mark" href="./" aria-label="MovieGenAI, all films">
       <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="4" width="20" height="14" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1 8h20M1 14h20M6 4v4M11 4v4M16 4v4M6 14v4M11 14v4M16 14v4" stroke="currentColor" stroke-width="1.5"/></svg>
-      <span>MovieGenAI</span>
     </a>
+    <button class="btn btn--text bar__films" id="films-btn" type="button">All films</button>
+    <div class="bar__title" id="bar-title">
+      <label class="visually-hidden" for="title-input">Film name</label>
+      <input class="title-input" id="title-input" type="text" maxlength="80" autocomplete="off" spellcheck="false">
+      <span class="save" id="save-state" role="status"></span>
+    </div>
     <div class="gpu" id="gpu" role="status" aria-live="polite">
       <span class="gpu__state" id="gpu-state">GPU stopped</span>
       <span class="gpu__cost num" id="gpu-cost"></span>
       <button class="btn btn--secondary" id="gpu-toggle" type="button">Start GPU</button>
-      <button class="btn btn--text" id="sign-out" type="button">Sign out</button>
     </div>
+    <button class="btn btn--text" id="sign-out" type="button">Sign out</button>
   </header>
 
   <p class="demo" id="demo-note" hidden>Demo mode. Scripts, voices and clips are placeholders until the GPU server is connected.</p>
 
-  <main class="studio">
-    <aside class="brief" aria-labelledby="brief-h">
-      <h2 id="brief-h">The idea</h2>
-      <form id="idea-form" class="stack">
-        <label class="field">
-          <span>What happens in it?</span>
-          <textarea id="idea" name="idea" rows="5" required placeholder="Two old friends meet at a night ferry after twenty years. One of them never left town."></textarea>
-        </label>
-        <fieldset class="field">
-          <legend>Length</legend>
-          <div class="seg" role="radiogroup">
-            <label><input type="radio" name="length" value="30" checked><span>30 s</span></label>
-            <label><input type="radio" name="length" value="60"><span>1 min</span></label>
-            <label><input type="radio" name="length" value="120"><span>2 min</span></label>
-          </div>
-        </fieldset>
-        <label class="field">
-          <span>Look</span>
-          <select name="look" id="look">
-            <option>Cinematic, natural light</option>
-            <option>Night, neon city</option>
-            <option>Documentary, handheld</option>
-            <option>Animated, soft 3D</option>
-          </select>
-        </label>
-        <button class="btn btn--primary" type="submit" id="write-btn">Write the script</button>
-        <p class="hint" id="write-hint">Start the GPU to write the script.</p>
-      </form>
+  <!-- The library: every film as a picture -->
+  <main class="library" id="library" hidden aria-labelledby="library-h">
+    <div class="library__head">
+      <h1 id="library-h">Your films</h1>
+      <button class="btn btn--primary" id="film-new" type="button">New film</button>
+    </div>
+    <ul class="films" id="films"></ul>
+  </main>
 
-      <section class="cast" id="cast" aria-labelledby="cast-h" hidden>
+  <!-- The studio: story and cast on the left, the storyboard in the middle -->
+  <main class="studio" id="studio">
+    <aside class="side">
+      <section class="panel" aria-labelledby="story-h">
+        <h2 id="story-h">Story</h2>
+        <form id="idea-form" class="stack">
+          <label class="field">
+            <span>What happens in it?</span>
+            <textarea id="idea" name="idea" rows="4" required placeholder="Two old friends meet at a night ferry after twenty years. One of them never left town."></textarea>
+          </label>
+          <div class="pair">
+            <fieldset class="field">
+              <legend>Length</legend>
+              <div class="seg seg--3">
+                <label><input type="radio" name="length" value="30" checked><span>30 s</span></label>
+                <label><input type="radio" name="length" value="60"><span>1 min</span></label>
+                <label><input type="radio" name="length" value="120"><span>2 min</span></label>
+              </div>
+            </fieldset>
+            <fieldset class="field">
+              <legend>Clip quality</legend>
+              <div class="seg seg--2">
+                <label><input type="radio" name="quality" value="draft" checked><span>Draft</span></label>
+                <label><input type="radio" name="quality" value="final"><span>Final</span></label>
+              </div>
+            </fieldset>
+          </div>
+          <label class="field">
+            <span>Look</span>
+            <select name="look" id="look">
+              <option>Cinematic, natural light</option>
+              <option>Night, neon city</option>
+              <option>Documentary, handheld</option>
+              <option>Animated, soft 3D</option>
+            </select>
+          </label>
+          <button class="btn btn--primary" type="submit" id="write-btn">Write the script</button>
+          <p class="hint" id="write-hint">Start the GPU to write the script.</p>
+        </form>
+      </section>
+
+      <section class="panel" id="cast" aria-labelledby="cast-h" hidden>
         <h2 id="cast-h">Cast</h2>
-        <ul class="cast__list" id="cast-list"></ul>
+        <form class="stack" id="cast-form">
+          <label class="field">
+            <span>Character</span>
+            <select id="cast-char"></select>
+          </label>
+          <fieldset class="field">
+            <legend>Accent</legend>
+            <div class="seg seg--3">
+              <label><input type="radio" name="c-accent" value="American"><span>American</span></label>
+              <label><input type="radio" name="c-accent" value="British"><span>British</span></label>
+              <label><input type="radio" name="c-accent" value=""><span>Any</span></label>
+            </div>
+          </fieldset>
+          <fieldset class="field">
+            <legend>Voice</legend>
+            <div class="seg seg--2">
+              <label><input type="radio" name="c-gender" value="woman"><span>Woman</span></label>
+              <label><input type="radio" name="c-gender" value="man"><span>Man</span></label>
+            </div>
+          </fieldset>
+          <fieldset class="field">
+            <legend>Age</legend>
+            <div class="seg seg--4">
+              <label><input type="radio" name="c-age" value="child"><span>Child</span></label>
+              <label><input type="radio" name="c-age" value="young"><span>Young</span></label>
+              <label><input type="radio" name="c-age" value="adult"><span>Adult</span></label>
+              <label><input type="radio" name="c-age" value="older"><span>Older</span></label>
+            </div>
+          </fieldset>
+          <label class="field">
+            <span>Voice type</span>
+            <select id="cast-voice"></select>
+          </label>
+          <p class="hint" id="cast-empty" hidden></p>
+          <div class="cast__acts">
+            <button class="btn btn--secondary" type="button" id="cast-play">Play</button>
+            <button class="btn btn--primary" type="submit" id="cast-save">Save voice</button>
+          </div>
+          <p class="hint" id="cast-current"></p>
+          <button class="btn btn--text cast__clone" type="button" id="clone-open">Clone a voice from a recording</button>
+        </form>
       </section>
     </aside>
 
-    <section class="cut" aria-labelledby="cut-h">
-      <div class="films">
-        <label class="films__pick">
-          <span class="visually-hidden">Film</span>
-          <select id="film-select"></select>
-        </label>
-        <button class="btn btn--secondary" id="film-new" type="button">New film</button>
-        <button class="btn btn--text" id="rename-btn" type="button">Rename</button>
-        <button class="btn btn--text" id="film-delete" type="button">Delete film</button>
-      </div>
-
-      <div class="cut__head">
-        <div class="title">
-          <h1 id="cut-h">New film</h1>
-          <form class="title__edit" id="rename-form" hidden>
-            <label class="visually-hidden" for="rename-input">Film name</label>
-            <input type="text" id="rename-input" maxlength="80" required>
-            <button class="btn btn--primary" type="submit">Save name</button>
-            <button class="btn btn--text" type="button" id="rename-cancel">Cancel</button>
-          </form>
+    <section class="board" aria-labelledby="board-h">
+      <div class="board__head">
+        <div>
+          <h1 id="board-h">Storyboard</h1>
+          <p class="board__meta num" id="board-meta"></p>
         </div>
-        <div class="cut__side">
-          <p class="cut__meta num" id="cut-meta"></p>
-          <p class="cut__save" id="save-state" role="status"></p>
-        </div>
-      </div>
-
-      <div class="batch" id="batch" hidden>
-        <button class="btn btn--secondary" id="make-all" type="button">Make every scene</button>
-        <p class="hint" id="batch-hint">Makes the voices, then the clip, for every scene still missing one. You can keep editing while it runs.</p>
+        <button class="btn btn--secondary" id="make-all" type="button" hidden>Make every scene</button>
       </div>
 
       <div class="empty" id="empty">
@@ -98,28 +141,28 @@
         <ol class="steps" id="steps">
           <li data-step="gpu"><h2>Start the GPU</h2><p>Switch it on in the top bar. It bills by the hour until you stop it.</p></li>
           <li data-step="script"><h2>Describe the film</h2><p>Write the idea on the left. The script comes back as scenes, with lines for each character.</p></li>
-          <li data-step="clips"><h2>Make voices and clips</h2><p>Pick a voice for each character, then make the voices and a clip for every scene.</p></li>
+          <li data-step="clips"><h2>Cast and make scenes</h2><p>Give each character a voice, then make every scene’s voices and clip.</p></li>
           <li data-step="movie"><h2>Build the movie</h2><p>The clips are stitched into one MP4 you can watch here and download.</p></li>
         </ol>
       </div>
 
-      <ol class="scenes" id="scenes" aria-busy="false"></ol>
+      <ul class="shots" id="shots" aria-busy="false"></ul>
 
       <section class="final" id="final" aria-labelledby="final-h" hidden>
-        <div class="cut__head">
-          <h2 id="final-h">The movie</h2>
-          <p class="cut__meta num" id="final-meta"></p>
-        </div>
-        <div class="screen screen--wide" id="final-screen"></div>
-        <div class="final__acts">
+        <div class="board__head">
+          <div>
+            <h2 id="final-h">The movie</h2>
+            <p class="board__meta num" id="final-meta"></p>
+          </div>
           <button class="btn btn--secondary" id="download-btn" type="button">Download MP4</button>
-          <p class="hint" id="download-hint"></p>
         </div>
+        <div class="frame frame--wide" id="final-frame"></div>
+        <p class="hint" id="download-hint"></p>
       </section>
     </section>
   </main>
 
-  <footer class="reel" aria-label="Timeline">
+  <footer class="reel" id="reel" aria-label="Timeline">
     <div class="reel__track" id="reel-track" aria-hidden="true"></div>
     <div class="reel__foot">
       <p class="num" id="reel-meta">Nothing on the timeline</p>
@@ -129,111 +172,82 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-  <dialog class="picker" id="voice-dialog" aria-labelledby="picker-h">
-    <div class="picker__head">
-      <h2 id="picker-h">Choose a voice</h2>
-      <button class="btn btn--secondary" type="button" id="picker-done">Done</button>
-    </div>
-    <div class="picker__filters">
-      <fieldset class="field">
-        <legend>Voice</legend>
-        <div class="seg seg--3">
-          <label><input type="radio" name="f-gender" value="" checked><span>Any</span></label>
-          <label><input type="radio" name="f-gender" value="woman"><span>Woman</span></label>
-          <label><input type="radio" name="f-gender" value="man"><span>Man</span></label>
-        </div>
-      </fieldset>
-      <fieldset class="field">
-        <legend>Age</legend>
-        <div class="seg seg--5">
-          <label><input type="radio" name="f-age" value="" checked><span>Any</span></label>
-          <label><input type="radio" name="f-age" value="child"><span>Child</span></label>
-          <label><input type="radio" name="f-age" value="young"><span>Young</span></label>
-          <label><input type="radio" name="f-age" value="adult"><span>Adult</span></label>
-          <label><input type="radio" name="f-age" value="older"><span>Older</span></label>
-        </div>
-      </fieldset>
-    </div>
-    <p class="hint">Ages are by ear, so play a voice before you choose it.</p>
-    <ul class="picker__list" id="voice-list"></ul>
-    <p class="picker__empty" id="voice-empty" hidden></p>
-
-    <details class="clone" id="clone">
-      <summary>Clone a voice from a recording</summary>
-      <form class="clone__form" id="clone-form">
-        <label class="field">
-          <span>Recording, 10 to 20 seconds of one person talking</span>
-          <input type="file" name="file" accept="audio/*" required>
-        </label>
-        <label class="field">
-          <span>Name for this voice</span>
-          <input type="text" name="name" maxlength="40" required>
-        </label>
-        <div class="clone__row">
-          <label class="field">
-            <span>Voice</span>
-            <select name="gender" required><option value="woman">Woman</option><option value="man">Man</option></select>
-          </label>
-          <label class="field">
-            <span>Age</span>
-            <select name="age" required><option value="child">Child</option><option value="young">Young</option><option value="adult" selected>Adult</option><option value="older">Older</option></select>
-          </label>
-        </div>
-        <label class="check">
-          <input type="checkbox" name="consent" value="yes" required>
-          <span>I have this person’s permission to copy their voice (a parent’s, for a child).</span>
-        </label>
-        <button class="btn btn--primary" type="submit" id="clone-btn">Add voice</button>
-        <p class="hint" id="clone-hint">The voice appears in the list once it’s added.</p>
-      </form>
-    </details>
-  </dialog>
-
-  <template id="screen-tpl">
-    <div class="screen__frame">
-      <div class="screen__empty">No clip yet</div>
-      <div class="screen__card" hidden><p class="screen__title"></p><p class="screen__shot"></p></div>
-      <div class="meter" hidden><span></span></div>
-    </div>
-    <div class="screen__bar">
-      <button class="btn btn--text" type="button" data-play disabled>Play</button>
-      <span class="num muted" data-clock></span>
-    </div>
-  </template>
-
-  <template id="scene-tpl">
-    <li class="scene">
-      <div class="screen" data-screen></div>
-      <div class="scene__body">
-        <div class="scene__title">
-          <h2 data-title></h2>
-          <span class="num muted" data-time></span>
-        </div>
-        <label class="field field--quiet">
-          <span>Shot</span>
-          <textarea rows="3" data-shot></textarea>
-        </label>
-        <ul class="lines" data-lines></ul>
-        <dl class="tasks">
-          <div class="task" data-task="voice">
-            <dt>Voices</dt>
-            <dd class="task__state" data-voice-status>Not made yet</dd>
-            <dd class="task__acts">
-              <button class="btn btn--text" type="button" data-play-voice hidden>Play</button>
-              <button class="btn btn--secondary" type="button" data-act="voice">Make voices</button>
-            </dd>
-          </div>
-          <div class="task" data-task="clip">
-            <dt>Clip</dt>
-            <dd class="task__state" data-clip-status>Not made yet</dd>
-            <dd class="task__acts">
-              <button class="btn btn--secondary" type="button" data-act="clip">Make clip</button>
-            </dd>
-          </div>
-        </dl>
+  <template id="shot-tpl">
+    <li class="shot">
+      <button class="shot__open" type="button">
+        <span class="frame" data-frame><span class="frame__label"></span><span class="frame__bar"><span></span></span></span>
+      </button>
+      <div class="shot__info">
+        <p class="shot__title"></p>
+        <span class="num muted shot__time"></span>
+      </div>
+      <p class="shot__line"></p>
+      <div class="shot__foot">
+        <span class="chips"><span class="chip" data-chip="voice"></span><span class="chip" data-chip="clip"></span></span>
+        <button class="btn btn--secondary shot__next" type="button"></button>
       </div>
     </li>
   </template>
+
+  <dialog class="sheet" id="shot-dialog" aria-labelledby="sd-title">
+    <div class="sheet__head">
+      <div>
+        <h2 id="sd-title"></h2>
+        <p class="num muted" id="sd-time"></p>
+      </div>
+      <button class="btn btn--secondary" type="button" id="sd-close">Close</button>
+    </div>
+    <div class="sheet__body">
+      <div class="sheet__media">
+        <div class="frame" id="sd-frame"><span class="frame__label"></span><span class="frame__bar"><span></span></span></div>
+        <button class="btn btn--text" type="button" id="sd-play">Play scene</button>
+      </div>
+      <div class="sheet__side">
+        <label class="field">
+          <span>Shot</span>
+          <textarea rows="5" id="sd-shot"></textarea>
+        </label>
+        <ul class="lines" id="sd-lines"></ul>
+        <dl class="tasks">
+          <div class="task" id="sd-voice"><dt>Voices</dt><dd class="task__state"></dd><dd class="task__acts"><button class="btn btn--text" type="button" data-play-voice>Play</button><button class="btn btn--secondary" type="button" data-act="voice"></button></dd></div>
+          <div class="task" id="sd-clip"><dt>Clip</dt><dd class="task__state"></dd><dd class="task__acts"><button class="btn btn--secondary" type="button" data-act="clip"></button></dd></div>
+        </dl>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog class="sheet sheet--narrow" id="clone-dialog" aria-labelledby="clone-h">
+    <div class="sheet__head">
+      <h2 id="clone-h">Clone a voice</h2>
+      <button class="btn btn--secondary" type="button" id="clone-close">Close</button>
+    </div>
+    <form class="stack" id="clone-form">
+      <label class="field">
+        <span>Recording, 10 to 20 seconds of one person talking</span>
+        <input type="file" name="file" accept="audio/*" required>
+      </label>
+      <label class="field">
+        <span>Name for this voice</span>
+        <input type="text" name="name" maxlength="40" required>
+      </label>
+      <div class="pair">
+        <label class="field">
+          <span>Voice</span>
+          <select name="gender" required><option value="woman">Woman</option><option value="man">Man</option></select>
+        </label>
+        <label class="field">
+          <span>Age</span>
+          <select name="age" required><option value="child">Child</option><option value="young">Young</option><option value="adult" selected>Adult</option><option value="older">Older</option></select>
+        </label>
+      </div>
+      <label class="check">
+        <input type="checkbox" name="consent" value="yes" required>
+        <span>I have this person’s permission to copy their voice (a parent’s, for a child).</span>
+      </label>
+      <button class="btn btn--primary" type="submit" id="clone-btn">Add voice</button>
+      <p class="hint" id="clone-hint">The voice joins the list, chosen for the character you’re casting.</p>
+    </form>
+  </dialog>
 
   <script src="api.js"></script>
   <script src="app.js"></script>
