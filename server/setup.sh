@@ -45,7 +45,8 @@ step "Chatterbox"
 if [ ! -x "$W/venvs/tts/bin/python" ]; then
   python3 -m venv "$W/venvs/tts"
   "$W/venvs/tts/bin/pip" install -q --upgrade pip
-  "$W/venvs/tts/bin/pip" install -q chatterbox-tts fastapi uvicorn python-multipart
+  # setuptools<81: Chatterbox's watermark library still imports pkg_resources
+  "$W/venvs/tts/bin/pip" install -q chatterbox-tts fastapi uvicorn python-multipart "setuptools<81"
 fi
 HF_HOME=$W/hf "$W/venvs/tts/bin/python" -c "from chatterbox.tts import ChatterboxTTS; ChatterboxTTS.from_pretrained(device='cuda'); print('chatterbox weights ready')"
 
