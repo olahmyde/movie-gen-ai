@@ -204,14 +204,37 @@ def write_script(idea, seconds, look):
 
 SR = 24000
 _models = {}
+
+def free_comfy():
+    """ComfyUI keeps its video and face models on the GPU after a render (about 20 GB of 24).
+    Ask it to let go so a voice model fits; the next render reloads them."""
+    try:
+        post_json(f"{COMFY}/free", {"unload_models": True, "free_memory": True}, timeout=30)
+        time.sleep(2)
+    except Exception as e:
+        print("couldn't free ComfyUI memory:", e, flush=True)
+    import torch
+    torch.cuda.empty_cache()
+
+def gpu_retry(fn):
+    """Run fn; if the GPU is out of memory, free ComfyUI's models and try once more."""
+    try:
+        return fn()
+    except Exception as e:
+        if "out of memory" not in str(e).lower():
+            raise
+        print("GPU full; freeing ComfyUI's models and retrying", flush=True)
+        free_comfy()
+        return fn()
+
 def model(name):
     if name not in _models:
         if name == "chatterbox":
             from chatterbox.tts import ChatterboxTTS
-            _models[name] = ChatterboxTTS.from_pretrained(device="cuda")
+            _models[name] = gpu_retry(lambda: ChatterboxTTS.from_pretrained(device="cuda"))
         else:  # kokoro-a (American) or kokoro-b (British)
             from kokoro import KPipeline
-            _models[name] = KPipeline(lang_code=name[-1], repo_id="hexgrad/Kokoro-82M")
+            _models[name] = gpu_retry(lambda: KPipeline(lang_code=name[-1], repo_id="hexgrad/Kokoro-82M"))
     return _models[name]
 
 def speak(text, voice):
@@ -222,9 +245,10 @@ def speak(text, voice):
     engine, name = voice.split(":", 1)
     if engine == "kokoro":
         pipe = model(f"kokoro-{name[0]}")
-        return torch.cat([torch.as_tensor(a).flatten().float() for _, _, a in pipe(text, voice=name)])
+        return gpu_retry(lambda: torch.cat([torch.as_tensor(a).flatten().float() for _, _, a in pipe(text, voice=name)]))
     ref = VOICES / f"{name}.wav"
-    wav = model("chatterbox").generate(text, audio_prompt_path=str(ref) if ref.exists() else None, exaggeration=0.5, cfg_weight=0.5)
+    cb = model("chatterbox")
+    wav = gpu_retry(lambda: cb.generate(text, audio_prompt_path=str(ref) if ref.exists() else None, exaggeration=0.5, cfg_weight=0.5))
     return wav.flatten().float()
 
 def save_wav(parts, out):
@@ -290,7 +314,7 @@ def wan_workflow(prompt, frames, seed, quality="draft"):
 
 CLIP_SECONDS_EXPECTED = {"draft": 80, "final": 240}  # ponytail: time-based progress; ComfyUI's websocket would be exact
 
-def run_comfy(job, workflow, expected_s, suffix):
+def run_comfy(job, workflow, expected_s, suffix, retried=False):
     """Queue a workflow, report time-based progress, and return its first output file ending in suffix."""
     pid = post_json(f"{COMFY}/prompt", {"prompt": workflow})["prompt_id"]
     t0 = time.time()
@@ -303,6 +327,12 @@ def run_comfy(job, workflow, expected_s, suffix):
         if h.get("status", {}).get("status_str") == "error":
             msgs = [m[1].get("exception_message", "") for m in h.get("status", {}).get("messages", []) if m[0] == "execution_error"]
             print("comfy error:", msgs, flush=True)
+            if not retried and any("out of memory" in m.lower() for m in msgs) and "chatterbox" in _models:
+                print("GPU full; unloading Chatterbox and retrying the render", flush=True)
+                del _models["chatterbox"]
+                import torch, gc
+                gc.collect(); torch.cuda.empty_cache()
+                return run_comfy(job, workflow, expected_s, suffix, retried=True)
             raise RuntimeError("The model failed on this one. Try again, or simplify the description.")
         for node in h.get("outputs", {}).values():
             for items in node.values():
