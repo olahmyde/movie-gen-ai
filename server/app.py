@@ -198,7 +198,7 @@ def wan_workflow(prompt, frames, seed):
                                                     "seed": seed, "steps": 20, "cfg": 5, "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1}},
         "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
         "10": {"class_type": "CreateVideo", "inputs": {"images": ["9", 0], "fps": 24}},
-        "11": {"class_type": "SaveVideo", "inputs": {"video": ["10", 0], "filename_prefix": "moviegen/clip", "format": "mp4", "codec": "h264"}},
+        "11": {"class_type": "SaveVideo", "inputs": {"video": ["10", 0], "filename_prefix": "moviegen/clip", "format": "mp4", "codec": "auto"}},
     }
 
 CLIP_SECONDS_EXPECTED = 240  # ponytail: progress is time-based; read ComfyUI's websocket if a real bar matters
