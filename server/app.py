@@ -220,7 +220,11 @@ def speak(text, voice):
 
 def save_wav(parts, out):
     import torch, torchaudio
-    torchaudio.save(str(out), torch.cat(parts).unsqueeze(0), SR)
+    wav = torch.cat(parts)
+    peak = wav.abs().max()
+    if peak > 0:
+        wav = wav * (0.9 / peak)  # every voice at the same level, whichever model made it
+    torchaudio.save(str(out), wav.unsqueeze(0), SR)
     return out
 
 def fake_wav(out, seconds=2):

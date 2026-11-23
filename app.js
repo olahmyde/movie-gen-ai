@@ -619,8 +619,15 @@ Promise.all([
   api.gpuStatus(),
   api.listVoices().catch(() => ({ voices: [], default: [] })),
   api.listFilms().catch((err) => { toast(`Couldn't load your films: ${err.message}`); return []; }),
-]).then(([g, v, films]) => {
+]).then(async ([g, v, films]) => {
   gpu = g; voiceList = v.voices; defaultVoices = v.default;
+  // Films made before saving moved to the server lived in this browser only: move them up once.
+  try {
+    const old = JSON.parse(localStorage.getItem("moviegen:films"))?.films?.filter((f) => f.scenes?.length && !films.some((x) => x.id === f.id)) || [];
+    for (const f of old) { await api.saveFilm(f); films.push(f); }
+    localStorage.removeItem("moviegen:films");
+    if (old.length) toast(`Moved ${old.length} film${old.length > 1 ? "s" : ""} from this browser to the studio.`);
+  } catch {}
   // A job that was running when the page closed didn't finish here; show it as not made.
   films.forEach((f) => f.scenes.forEach((s) => ["voice", "clip"].forEach((k) => { if (s[k] === "busy") s[k] = "none"; })));
   store.films = films.length ? films : [blankFilm()];
