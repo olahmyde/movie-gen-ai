@@ -26,6 +26,17 @@ const api = (() => {
     return data;
   }
 
+  // Waits for a GPU job (clip or portrait) and returns its file's URL.
+  async function poll(id, onProgress = () => {}, every = 3000) {
+    for (;;) {
+      await wait(every);
+      const j = await call(`/api/clip/${id}`);
+      onProgress(j.progress);
+      if (j.state === "done") return j.url;
+      if (j.state === "error") throw new Error(j.error);
+    }
+  }
+
   const real = {
     async signIn(email, password) {
       if (!email || !password) throw new Error("Enter your email and password.");
@@ -49,15 +60,22 @@ const api = (() => {
     deleteFilm: (id) => call(`/api/films/${id}`, undefined, "DELETE"),
     writeScript: (o) => call("/api/script", o),
     makeVoices: (scene, cast) => call("/api/voice", { lines: scene.lines, cast }),
-    async makeClip(scene, onProgress, look, quality) {
-      const { id } = await call("/api/clip", { shot: scene.shot, look, seconds: scene.dur, quality });
-      for (;;) {
-        await wait(3000);
-        const j = await call(`/api/clip/${id}`);
-        onProgress(j.progress);
-        if (j.state === "done") return { url: j.url };
-        if (j.state === "error") throw new Error(j.error);
-      }
+    // extra: { quality, cast, voiceUrl, portraitUrl }; with a voice and a face the server lip-syncs the clip
+    async makeClip(scene, onProgress, look, extra = {}) {
+      const { id } = await call("/api/clip", { shot: scene.shot, look, seconds: scene.dur, ...extra });
+      return { url: await poll(id, onProgress) };
+    },
+    async makePortrait(name, look, filmLook, onProgress) {
+      const { id } = await call("/api/portrait", { name, look, filmLook });
+      return poll(id, onProgress, 1500);
+    },
+    async uploadPortrait(file) {
+      const form = new FormData();
+      form.append("file", file);
+      const r = await fetch("/api/portrait/upload", { method: "POST", credentials: "same-origin", body: form });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `The server answered ${r.status}.`);
+      return data.url;
     },
     buildMovie: (film) => call("/api/movie", { scenes: film.scenes.map((s) => ({ clipUrl: s.clipUrl, voiceUrl: s.voiceUrl })) }),
   };
@@ -121,6 +139,8 @@ const api = (() => {
       return { url: null };
     },
     async buildMovie() { await wait(1500); return { url: null }; },
+    async makePortrait() { await wait(1500); return null; },
+    async uploadPortrait(file) { return URL.createObjectURL(file); }, // demo: shown in this browser only
   };
 
   return {

@@ -29,6 +29,7 @@ moviegen:
   text_encoders: text_encoders
   vae: vae
   audio_encoders: audio_encoders
+  loras: loras
 EOF
 grep -q "extra-model-paths-config" "$ARGS" 2>/dev/null || printf '%s\n' "--extra-model-paths-config $W/models/extra_model_paths.yaml" "--output-directory $W/outputs" >> "$ARGS"
 for i in $(seq 1 60); do curl -fs http://127.0.0.1:8188/ >/dev/null && break; sleep 5; done

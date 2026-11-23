@@ -7,7 +7,7 @@ set -euo pipefail
 W=/workspace
 M=$W/models
 LOG=$W/logs
-mkdir -p "$M"/{diffusion_models,text_encoders,vae,audio_encoders} "$W"/ollama/models "$W"/hf "$LOG"
+mkdir -p "$M"/{diffusion_models,text_encoders,vae,audio_encoders,loras} "$W"/ollama/models "$W"/hf "$LOG"
 
 step() { echo; echo "== $* =="; }
 
@@ -29,6 +29,16 @@ dl text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors    text_encoders &
 dl vae/wan2.2_vae.safetensors                              vae &
 dl vae/wan_2.1_vae.safetensors                             vae &
 dl audio_encoders/wav2vec2_large_english_fp16.safetensors  audio_encoders &
+dl loras/wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors loras &  # 4-step lip-sync
+wait
+
+# 2b. Z-Image Turbo for character faces (about 21 GB)
+step "Z-Image Turbo"
+ZI=https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files
+zdl() { local out="$M/$2/$(basename "$1")"; [ -s "$out" ] && { echo "have $(basename "$1")"; return; }; curl -fsSL --retry 5 -C - -o "$out.part" "$ZI/$1" && mv "$out.part" "$out"; }
+zdl diffusion_models/z_image_turbo_bf16.safetensors diffusion_models &
+zdl text_encoders/qwen_3_4b.safetensors text_encoders &
+zdl vae/ae.safetensors vae &
 wait
 
 # 3. Ollama + Qwen3 for scripts (binary and models both live on the volume)

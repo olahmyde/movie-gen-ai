@@ -24,6 +24,7 @@ VOICES = DATA / "voices"                                # optional reference cli
 OLLAMA = "http://127.0.0.1:11434"
 COMFY = "http://127.0.0.1:8188"
 COMFY_OUT = Path(os.environ.get("COMFY_OUTPUT", "/workspace/outputs"))
+COMFY_IN = Path(os.environ.get("COMFY_INPUT", "/workspace/runpod-slim/ComfyUI/input"))
 LLM = os.environ.get("MOVIEGEN_LLM", "qwen3:14b")
 RATE = float(os.environ.get("MOVIEGEN_RATE", "0.89"))   # $/hr shown in the app
 IDLE_STOP_MIN = int(os.environ.get("MOVIEGEN_IDLE_STOP_MIN", "30"))
@@ -161,7 +162,7 @@ SCRIPT_SCHEMA = {
     "type": "object", "required": ["title", "cast", "scenes"],
     "properties": {
         "title": {"type": "string"},
-        "cast": {"type": "array", "items": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}},
+        "cast": {"type": "array", "items": {"type": "object", "required": ["name", "look"], "properties": {"name": {"type": "string"}, "look": {"type": "string"}}}},
         "scenes": {"type": "array", "items": {"type": "object", "required": ["title", "shot", "lines"], "properties": {
             "title": {"type": "string"}, "shot": {"type": "string"},
             "lines": {"type": "array", "items": {"type": "object", "required": ["who", "text"], "properties": {"who": {"type": "string"}, "text": {"type": "string"}}}},
@@ -174,20 +175,21 @@ def write_script(idea, seconds, look):
     dur = max(2, round(seconds / n))
     if FAKE:
         time.sleep(float(os.environ.get("MOVIEGEN_FAKE_DELAY", "0")))
-        out = {"title": idea[:40], "cast": [{"name": "Ada"}, {"name": "Marcus"}],
+        out = {"title": idea[:40], "cast": [{"name": "Ada", "look": "woman in her thirties, short dark hair, green coat"}, {"name": "Marcus", "look": "man in his forties, grey beard, navy jacket"}],
                "scenes": [{"title": f"Scene {i + 1}", "shot": idea, "lines": [{"who": "Ada", "text": "Test line."}]} for i in range(n)]}
     else:
         prompt = (f"Write a short film of exactly {n} scenes, each about {dur} seconds on screen. Idea: {idea}\n"
                   f"Visual look: {look}.\nFor each scene give a short title, a one-paragraph shot description a video model "
                   f"can render (subject, action, setting, camera, light; no dialogue in it), and at most one or two short spoken "
                   f"lines that fit in {dur} seconds. When a scene has a line, its shot must show that character on camera, "
-                  f"facing us and speaking it; a scene with nobody speaking has no lines. Two to four characters, and describe "
-                  f"each character's look the same way in every shot (age, hair, clothes). Title the film in five words or fewer.")
+                  f"facing us and speaking it; a scene with nobody speaking has no lines. Two to four characters. For each character "
+                  f"give a one-line look (age, build, face, hair, clothes) and repeat it word for word whenever they appear in a shot. "
+                  f"Title the film in five words or fewer.")
         r = post_json(f"{OLLAMA}/api/chat", {"model": LLM, "stream": False, "think": False, "format": SCRIPT_SCHEMA,
                                              "options": {"temperature": 0.8}, "keep_alive": 0,
                                              "messages": [{"role": "user", "content": prompt}]})
         out = json.loads(r["message"]["content"])
-    cast = [{"name": c["name"], "voice": DEFAULT_CAST[i % len(DEFAULT_CAST)]} for i, c in enumerate(out["cast"][:4])]
+    cast = [{"name": c["name"], "look": c.get("look", ""), "voice": DEFAULT_CAST[i % len(DEFAULT_CAST)]} for i, c in enumerate(out["cast"][:4])]
     scenes, t = [], 0
     for s in out["scenes"][:n]:
         scenes.append({"id": uuid.uuid4().hex, "title": s["title"], "shot": s["shot"], "lines": s["lines"][:2], "start": t, "dur": dur})
@@ -278,29 +280,130 @@ def wan_workflow(prompt, frames, seed, quality="draft"):
 
 CLIP_SECONDS_EXPECTED = {"draft": 80, "final": 240}  # ponytail: time-based progress; ComfyUI's websocket would be exact
 
-def make_clip(job, shot, look, seconds, quality="draft"):
-    frames = min(121, int(seconds * 24) + 1)
-    out = FILES / f"{uuid.uuid4().hex}.mp4"
-    if FAKE:
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc=size=640x352:rate=24:duration={seconds}",
-                        "-pix_fmt", "yuv420p", str(out)], check=True)
-        return out
-    pid = post_json(f"{COMFY}/prompt", {"prompt": wan_workflow(f"{look}. {shot}", frames, secrets.randbelow(2**32), quality)})["prompt_id"]
+def run_comfy(job, workflow, expected_s, suffix):
+    """Queue a workflow, report time-based progress, and return its first output file ending in suffix."""
+    pid = post_json(f"{COMFY}/prompt", {"prompt": workflow})["prompt_id"]
     t0 = time.time()
     while True:
-        time.sleep(3)
-        job["progress"] = min(0.95, (time.time() - t0) / CLIP_SECONDS_EXPECTED.get(quality, 80))
+        time.sleep(2)
+        job["progress"] = min(0.95, (time.time() - t0) / expected_s)
         h = get_json(f"{COMFY}/history/{pid}").get(pid)
         if not h:
             continue
         if h.get("status", {}).get("status_str") == "error":
-            raise RuntimeError("The video model failed on this shot. Try again, or simplify the shot.")
+            msgs = [m[1].get("exception_message", "") for m in h.get("status", {}).get("messages", []) if m[0] == "execution_error"]
+            print("comfy error:", msgs, flush=True)
+            raise RuntimeError("The model failed on this one. Try again, or simplify the description.")
         for node in h.get("outputs", {}).values():
             for items in node.values():
                 for f in items if isinstance(items, list) else []:
-                    if isinstance(f, dict) and str(f.get("filename", "")).endswith(".mp4"):
+                    if isinstance(f, dict) and str(f.get("filename", "")).endswith(suffix):
+                        out = FILES / f"{uuid.uuid4().hex}{suffix}"
                         shutil.move(str(COMFY_OUT / f.get("subfolder", "") / f["filename"]), out)
                         return out
+        if h.get("status", {}).get("completed"):
+            raise RuntimeError("The model finished without a file. Try again.")
+
+def to_comfy_input(path):
+    """ComfyUI loads images and audio from its input folder; copy ours in under a unique name."""
+    COMFY_IN.mkdir(parents=True, exist_ok=True)
+    name = f"mg-{uuid.uuid4().hex[:10]}{path.suffix}"
+    shutil.copy(path, COMFY_IN / name)
+    return name
+
+def audio_seconds(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    return float(r.stdout.strip() or 0)
+
+def with_looks(shot, cast):
+    """Put each named character's fixed look into the shot, so the video model draws the same person every time."""
+    looks = [f"{c['name']} is {c['look']}" for c in cast if c.get("look") and c["name"].lower() in shot.lower()]
+    return shot + (" " + ". ".join(looks) + "." if looks else "")
+
+# Portraits: Z-Image Turbo, wired as ComfyUI's own template (8 steps, CFG 1).
+def portrait_workflow(prompt, seed):
+    return {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "z_image_turbo_bf16.safetensors", "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_4b.safetensors", "type": "lumina2", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+        "4": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
+        "6": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
+        "7": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "8": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["7", 0],
+                                                    "seed": seed, "steps": 8, "cfg": 1, "sampler_name": "res_multistep", "scheduler": "simple", "denoise": 1}},
+        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
+        "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": "moviegen/portrait"}},
+    }
+
+def make_portrait(job, name, look, film_look):
+    if FAKE:
+        out = FILES / f"{uuid.uuid4().hex}.png"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=512x512", "-frames:v", "1", str(out)], check=True)
+        return out
+    prompt = (f"{film_look}. Cinematic film still, medium close-up portrait of {name}, {look}. "
+              f"Facing the camera, mouth closed, natural expression, realistic skin, shallow depth of field, soft film lighting.")
+    return run_comfy(job, portrait_workflow(prompt, secrets.randbelow(2**32)), 25, ".png")
+
+# Lip-sync: Wan 2.2 S2V, wired as ComfyUI's own template (4-step LoRA, CFG 1, 77 frames a segment at 16 fps).
+S2V_SEG = 77
+def s2v_workflow(prompt, image_name, audio_name, segments, size, seed):
+    w, h = size
+    wf = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan2.2_s2v_14B_fp8_scaled.safetensors", "weight_dtype": "default"}},
+        "2": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": "wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors", "strength_model": 1}},
+        "3": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["2", 0], "shift": 8}},
+        "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "type": "wan", "device": "default"}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 0], "text": prompt}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 0], "text": NEGATIVE}},
+        "7": {"class_type": "VAELoader", "inputs": {"vae_name": "wan_2.1_vae.safetensors"}},
+        "8": {"class_type": "AudioEncoderLoader", "inputs": {"audio_encoder_name": "wav2vec2_large_english_fp16.safetensors"}},
+        "9": {"class_type": "LoadAudio", "inputs": {"audio": audio_name}},
+        "10": {"class_type": "AudioEncoderEncode", "inputs": {"audio_encoder": ["8", 0], "audio": ["9", 0]}},
+        "11": {"class_type": "LoadImage", "inputs": {"image": image_name}},
+        "12": {"class_type": "WanSoundImageToVideo", "inputs": {"positive": ["5", 0], "negative": ["6", 0], "vae": ["7", 0], "width": w, "height": h,
+               "length": S2V_SEG, "batch_size": 1, "audio_encoder_output": ["10", 0], "ref_image": ["11", 0]}},
+        "13": {"class_type": "KSampler", "inputs": {"model": ["3", 0], "positive": ["12", 0], "negative": ["12", 1], "latent_image": ["12", 2],
+               "seed": seed, "steps": 4, "cfg": 1, "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1}},
+    }
+    latent = ["13", 0]
+    for i in range(1, segments):  # each extension continues from everything so far
+        e, k, c = f"e{i}", f"k{i}", f"c{i}"
+        wf[e] = {"class_type": "WanSoundImageToVideoExtend", "inputs": {"positive": ["5", 0], "negative": ["6", 0], "vae": ["7", 0], "length": S2V_SEG,
+                 "video_latent": latent, "audio_encoder_output": ["10", 0], "ref_image": ["11", 0]}}
+        wf[k] = {"class_type": "KSampler", "inputs": {"model": ["3", 0], "positive": [e, 0], "negative": [e, 1], "latent_image": [e, 2],
+                 "seed": seed + i, "steps": 4, "cfg": 1, "sampler_name": "uni_pc", "scheduler": "simple", "denoise": 1}}
+        wf[c] = {"class_type": "LatentConcat", "inputs": {"samples1": latent, "samples2": [k, 0], "dim": "t"}}
+        latent = [c, 0]
+    wf["20"] = {"class_type": "VAEDecode", "inputs": {"samples": latent, "vae": ["7", 0]}}
+    wf["21"] = {"class_type": "ImageFromBatch", "inputs": {"image": ["20", 0], "batch_index": 3, "length": 4096}}  # drop the reference frames
+    wf["22"] = {"class_type": "CreateVideo", "inputs": {"images": ["21", 0], "fps": 16, "audio": ["9", 0]}}
+    wf["23"] = {"class_type": "SaveVideo", "inputs": {"video": ["22", 0], "filename_prefix": "moviegen/talk", "format": "mp4", "codec": "auto"}}
+    return wf
+
+S2V_SIZES = {"draft": (832, 480), "final": (1280, 720)}
+S2V_SECONDS_PER_SEGMENT = {"draft": 90, "final": 300}
+
+def make_clip(job, shot, look, seconds, quality="draft", cast=(), voice=None, portrait=None):
+    """Lines plus the speaker's face: a lip-synced S2V clip. Otherwise text-to-video with everyone's fixed look."""
+    if voice and portrait:
+        if FAKE:
+            out = FILES / f"{uuid.uuid4().hex}.mp4"
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc=size=640x352:rate=16:duration={seconds}", "-i", str(voice),
+                            "-shortest", "-pix_fmt", "yuv420p", str(out)], check=True)
+            return out
+        segments = max(1, min(4, math.ceil(audio_seconds(voice) / (S2V_SEG / 16))))
+        wf = s2v_workflow(f"{look}. {with_looks(shot, cast)} The character speaks to the camera, lips moving with the words.",
+                          to_comfy_input(portrait), to_comfy_input(voice), segments, S2V_SIZES.get(quality, S2V_SIZES["draft"]), secrets.randbelow(2**31))
+        return run_comfy(job, wf, S2V_SECONDS_PER_SEGMENT.get(quality, 90) * segments, ".mp4")
+    frames = min(121, int(seconds * 24) + 1)
+    if FAKE:
+        out = FILES / f"{uuid.uuid4().hex}.mp4"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc=size=640x352:rate=24:duration={seconds}",
+                        "-pix_fmt", "yuv420p", str(out)], check=True)
+        return out
+    wf = wan_workflow(f"{look}. {with_looks(shot, cast)}", frames, secrets.randbelow(2**32), quality)
+    return run_comfy(job, wf, CLIP_SECONDS_EXPECTED.get(quality, 80), ".mp4")
 
 
 # ---------- the movie (ffmpeg) ----------
@@ -313,10 +416,16 @@ def file_of(url):
         raise ValueError("A clip or voice file is missing. Remake that scene.")
     return p
 
+def has_audio(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
 def build_movie(scenes):
     parts = []
     for s in scenes:
         clip, voice = file_of(s.get("clipUrl")), file_of(s.get("voiceUrl"))
+        if clip and has_audio(clip):
+            voice = clip  # lip-synced clips already carry their voice
         if not clip:
             raise ValueError("Every scene needs a clip before the movie can be built.")
         part = FILES / f"part-{uuid.uuid4().hex}.mp4"
@@ -361,7 +470,7 @@ url_of = lambda p: f"/files/{p.name}"
 async def json_only_writes(request: Request, call_next):
     # A cross-site form can't send JSON, so this plus SameSite cookies blocks CSRF.
     # The one upload route takes a file, and its session cookie is SameSite=Strict.
-    if (request.method in ("POST", "PUT") and request.url.path.startswith("/api/") and request.url.path != "/api/voices/clone"
+    if (request.method in ("POST", "PUT") and request.url.path.startswith("/api/") and request.url.path not in ("/api/voices/clone", "/api/portrait/upload")
             and "application/json" not in request.headers.get("content-type", "")):
         return Response('{"detail":"Send JSON."}', 415, media_type="application/json")
     return await call_next(request)
@@ -503,8 +612,42 @@ def clip(body: dict, request: Request):
     shot, look = str(body.get("shot", ""))[:1500], str(body.get("look", ""))[:100]
     seconds = min(max(float(body.get("seconds", 5)), 1), 5)
     quality = "final" if body.get("quality") == "final" else "draft"
-    job = submit("clip", lambda j: make_clip(j, shot, look, seconds, quality))
+    cast = [{"name": str(c.get("name", ""))[:60], "look": str(c.get("look", ""))[:300]} for c in body.get("cast", [])[:6]]
+    try:
+        voice, portrait = file_of(body.get("voiceUrl")), file_of(body.get("portraitUrl"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    job = submit("clip", lambda j: make_clip(j, shot, look, seconds, quality, cast, voice, portrait))
     return {"id": job["id"]}
+
+@app.post("/api/portrait")
+def portrait(body: dict, request: Request):
+    user(request)
+    name, look = str(body.get("name", ""))[:60], str(body.get("look", "")).strip()[:400]
+    if not look:
+        raise HTTPException(400, "Describe how the character looks first.")
+    job = submit("portrait", lambda j: make_portrait(j, name, look, str(body.get("filmLook", ""))[:100]))
+    return {"id": job["id"]}
+
+@app.post("/api/portrait/upload")
+async def portrait_upload(request: Request):
+    user(request)
+    f = (await request.form()).get("file")
+    if not f or not hasattr(f, "read"):
+        raise HTTPException(400, "Choose a photo.")
+    data = await f.read()
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(413, "Keep the photo under 15 MB.")
+    raw, out = FILES / f"{uuid.uuid4().hex}.upload", FILES / f"{uuid.uuid4().hex}.png"
+    raw.write_bytes(data)
+    try:  # one frame, at most 1024 px on the long side
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(raw), "-frames:v", "1",
+                        "-vf", "scale='min(1024,iw)':'min(1024,ih)':force_original_aspect_ratio=decrease", str(out)], check=True)
+    except subprocess.CalledProcessError:
+        raise HTTPException(400, "That file isn't a photo we can read. Try a JPG or PNG.")
+    finally:
+        raw.unlink(missing_ok=True)
+    return {"url": url_of(out)}
 
 @app.get("/api/clip/{job_id}")
 def clip_status(job_id: str, request: Request):

@@ -183,9 +183,19 @@ function renderCast() {
   f.cast.forEach((c) => sel.append(new Option(`${c.name}, ${voiceById(c.voice)?.name || "no voice"}`, c.name, false, c.name === castChar)));
   loadCastFilters();
 }
+const castMember = () => film().cast.find((x) => x.name === castChar);
+function paintFace(c) {
+  const frame = $("#face-frame");
+  $("img", frame)?.remove();
+  $(".frame__label", frame).textContent = c?.portrait ? "" : "No face yet";
+  if (c?.portrait) frame.prepend(Object.assign(document.createElement("img"), { src: c.portrait, alt: `${c.name}'s face` }));
+  $("#face-make").textContent = c?.portrait ? "Try another face" : "Generate face";
+}
 // Set the filters to the character's current voice, then fill the voice list.
 function loadCastFilters() {
   const c = film().cast.find((x) => x.name === castChar);
+  paintFace(c);
+  $("#cast-look").value = c?.look || "";
   const v = voiceById(c?.voice);
   if (v) {
     setRadio("c-accent", v.accent || "");
@@ -214,6 +224,41 @@ function fillVoices(keep) {
   $("#cast-current").textContent = c ? `${c.name} speaks as ${voiceById(c.voice)?.name || "nobody yet"}.` : "";
 }
 $("#cast-char").addEventListener("change", (e) => { castChar = e.target.value; loadCastFilters(); });
+$("#cast-look").addEventListener("change", (e) => { const c = castMember(); if (c) { c.look = e.target.value.trim(); save(); } });
+
+// A character's new face makes their lip-synced clips out of date.
+function setFace(c, url) {
+  c.portrait = url;
+  film().scenes.forEach((s) => {
+    if (s.clip === "done" && s.lipsync && s.lines[0]?.who === c.name) { s.clip = "none"; delete s.clipUrl; delete s.lipsync; film().movie = null; }
+  });
+  save(); paintFace(c); renderBoard(); renderReel();
+}
+$("#face-make").addEventListener("click", async (e) => {
+  const c = castMember();
+  if (!c) return;
+  c.look = $("#cast-look").value.trim();
+  if (!c.look) { $("#face-hint").dataset.tone = "error"; $("#face-hint").textContent = "Describe how they look first: age, face, hair, clothes."; return; }
+  $("#face-hint").dataset.tone = "";
+  const done = busy(e.currentTarget, "Generating the face"), frame = $("#face-frame");
+  frame.classList.add("shimmer"); $(".frame__label", frame).textContent = "";
+  try {
+    const url = await api.makePortrait(c.name, c.look, film().look);
+    if (url) setFace(c, url); else toast("Faces need the GPU server; demo mode can't make one.");
+  } catch (err) { toast(`The face didn't come out: ${err.message}`); }
+  frame.classList.remove("shimmer");
+  done(); paintFace(c);
+});
+$("#face-upload").addEventListener("change", async (e) => {
+  const c = castMember(), file = e.target.files[0];
+  e.target.value = "";
+  if (!c || !file) return;
+  const frame = $("#face-frame");
+  frame.classList.add("shimmer");
+  try { setFace(c, await api.uploadPortrait(file)); }
+  catch (err) { toast(`That photo didn't upload: ${err.message}`); }
+  frame.classList.remove("shimmer");
+});
 $("#cast-form").addEventListener("change", (e) => { if (e.target.name?.startsWith("c-")) fillVoices($("#cast-voice").value); });
 $("#cast-play").addEventListener("click", (e) => hearVoice(e.currentTarget, $("#cast-voice").value));
 $("#cast-form").addEventListener("submit", (e) => {
@@ -280,6 +325,8 @@ function paintFrame(frame, s, { controls = false } = {}) {
   frame.dataset.state = s.clip || "none";
   frame.classList.toggle("shimmer", s.clip === "busy");
   const label = $(".frame__label", frame);
+  $(".shot__face", frame)?.remove();
+  if (s.clip !== "done" && s.face) frame.append(Object.assign(document.createElement("img"), { className: "shot__face", src: s.face, alt: "" }));
   if (s.clip === "done" && s.clipUrl) {
     if (!vid) { vid = Object.assign(document.createElement("video"), { playsInline: true, preload: "metadata" }); frame.prepend(vid); }
     vid.muted = !controls; vid.controls = controls;
@@ -298,6 +345,7 @@ let playback = null;
 function stopPlayback() { playback?.stop(); playback = null; }
 function voiceOf(s) {
   voicePlayer?.pause();
+  if (s.lipsync && s.clipUrl) return; // the clip speaks for itself
   if (s.voiceUrl) { voicePlayer = new Audio(s.voiceUrl); voicePlayer.play().catch(() => {}); }
   else if (api.demo) say(s.lines);
 }
@@ -309,7 +357,7 @@ function play(frame, scenes, btn) {
     i++;
     if (i >= scenes.length) return end();
     const vid = paintFrame(frame, scenes[i]);
-    if (vid) { vid.currentTime = 0; vid.play().catch(() => {}); }
+    if (vid) { vid.muted = !scenes[i].lipsync; vid.currentTime = 0; vid.play().catch(() => {}); }
     voiceOf(scenes[i]);
     timer = setTimeout(next, scenes[i].dur * 1000);
   };
@@ -362,6 +410,7 @@ function shotCard(s, i) {
   $(".shot__title", li).textContent = s.title;
   $(".shot__time", li).textContent = `${fmt(s.start)}, ${s.dur} s`;
   $(".shot__line", li).textContent = s.lines.length ? `${s.lines[0].who}: “${s.lines[0].text}”` : "No lines";
+  s.face = film().cast.find((c) => c.name === s.lines[0]?.who)?.portrait;
   paintFrame($("[data-frame]", li), s);
   for (const k of ["voice", "clip"]) {
     const chip = $(`[data-chip="${k}"]`, li);
@@ -446,7 +495,10 @@ async function runTask(s, kind) {
   s[kind] = "busy"; delete s.err;
   renderBoard(); renderReel();
   try {
-    if (kind === "voice") s.voiceUrl = (await api.makeVoices(s, f.cast)).url;
+    if (kind === "voice") {
+      s.voiceUrl = (await api.makeVoices(s, f.cast)).url;
+      if (s.lipsync && s.clip === "done") { s.clip = "none"; delete s.clipUrl; delete s.lipsync; }
+    }
     else {
       const onProgress = (p) => {
         setReel(s.id, p);
@@ -454,7 +506,18 @@ async function runTask(s, kind) {
         if (card) setBar(card, p);
         if (sheetId === s.id) setBar($("#sd-frame"), p);
       };
-      s.clipUrl = (await api.makeClip(s, onProgress, f.look, f.quality || "draft")).url;
+      const speaker = f.cast.find((c) => c.name === s.lines[0]?.who);
+      if (speaker?.portrait && s.voice !== "done" && s.lines.length) {
+        s.clip = "none"; await runTask(s, "voice"); s.clip = "busy"; renderBoard();  // lip-sync needs the voice first
+      }
+      const lipsync = !!(speaker?.portrait && s.voice === "done" && s.voiceUrl);
+      s.clipUrl = (await api.makeClip(s, onProgress, f.look, {
+        quality: f.quality || "draft",
+        cast: f.cast.map((c) => ({ name: c.name, look: c.look || "" })),
+        voiceUrl: lipsync ? s.voiceUrl : undefined,
+        portraitUrl: lipsync ? speaker.portrait : undefined,
+      })).url;
+      s.lipsync = lipsync;
     }
     f.movie = null; // anything new makes the built movie out of date
     s[kind] = "done";

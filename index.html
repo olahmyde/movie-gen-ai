@@ -88,6 +88,23 @@
             <span>Character</span>
             <select id="cast-char"></select>
           </label>
+          <div class="face">
+            <div class="frame frame--face" id="face-frame"><span class="frame__label">No face yet</span></div>
+            <div class="face__side">
+              <label class="field">
+                <span>Look</span>
+                <textarea id="cast-look" rows="4" maxlength="400" placeholder="Man in his forties, grey beard, navy jacket"></textarea>
+              </label>
+            </div>
+          </div>
+          <div class="cast__acts">
+            <button class="btn btn--secondary" type="button" id="face-make">Generate face</button>
+            <label class="btn btn--secondary upload">
+              <input type="file" id="face-upload" accept="image/*" class="visually-hidden">
+              <span>Upload photo</span>
+            </label>
+          </div>
+          <p class="hint" id="face-hint">The face is used in every scene this character speaks in, so they stay the same person.</p>
           <fieldset class="field">
             <legend>Accent</legend>
             <div class="seg seg--3">
