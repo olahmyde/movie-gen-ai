@@ -24,4 +24,8 @@ moviegen:
 EOF
 pgrep -f "ComfyUI/main.py" >/dev/null || (cd "$COMFY" && nohup python main.py --listen 127.0.0.1 --port 8188 --output-directory "$W/outputs" > "$LOG/comfyui.log" 2>&1 &)
 
-echo "ollama :11434, comfyui :8188 ($COMFY). Logs in $LOG"
+# MovieGenAI server (the only public port; it auto-stops the pod after 30 idle minutes)
+cd "$W/movie-gen-ai" && git pull -q || true
+pgrep -f "server/app.py" >/dev/null || HF_HOME=$W/hf COMFY_OUTPUT=$W/outputs nohup "$W/venvs/tts/bin/python" "$W/movie-gen-ai/server/app.py" > "$LOG/server.log" 2>&1 &
+
+echo "ollama :11434, comfyui :8188 ($COMFY), moviegen :8000. Logs in $LOG"

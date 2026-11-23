@@ -49,5 +49,9 @@ if [ ! -x "$W/venvs/tts/bin/python" ]; then
 fi
 HF_HOME=$W/hf "$W/venvs/tts/bin/python" -c "from chatterbox.tts import ChatterboxTTS; ChatterboxTTS.from_pretrained(device='cuda'); print('chatterbox weights ready')"
 
+# 5. The MovieGenAI code (the server serves the front end from here)
+step "MovieGenAI code"
+[ -d "$W/movie-gen-ai/.git" ] || git clone -q https://github.com/olahmyde/movie-gen-ai.git "$W/movie-gen-ai"
+
 step "done"
 du -sh "$M" "$W/ollama" "$W/venvs" "$W/hf" 2>/dev/null

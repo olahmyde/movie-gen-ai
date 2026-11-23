@@ -55,7 +55,12 @@ function renderGpu() {
 }
 
 $("#gpu-toggle").addEventListener("click", async () => {
-  if (running()) { gpu = await api.gpuStop(); renderGpu(); toast("GPU stopped. Billing has stopped too."); return; }
+  if (running()) {
+    if (!api.demo && !confirm("Stop the GPU? Billing stops, and this page stops working until the pod is started again on runpod.io.")) return;
+    gpu = await api.gpuStop(); renderGpu();
+    toast(api.demo ? "GPU stopped. Billing has stopped too." : "GPU stopping. Start the pod on runpod.io to use the studio again.");
+    return;
+  }
   gpu = { state: "starting" }; renderGpu();
   gpu = await api.gpuStart(); renderGpu();
 });
@@ -165,16 +170,34 @@ function screenEl(host) {
     clock: $("[data-clock]", host),
   };
 }
-function showCard(v, s) {
+// A scene with a real clip shows the clip; otherwise its title card.
+function showCard(v, s, { controls = false } = {}) {
+  let vid = $("video", v.frame);
+  if (s.clipUrl) {
+    if (!vid) { vid = document.createElement("video"); vid.playsInline = true; vid.preload = "metadata"; v.frame.append(vid); }
+    vid.muted = !controls; vid.controls = controls;
+    if (!vid.src.endsWith(s.clipUrl)) vid.src = s.clipUrl;
+    v.card.hidden = true;
+    return vid;
+  }
+  vid?.remove();
   v.card.hidden = false;
   $(".screen__title", v.card).textContent = s.title;
   $(".screen__shot", v.card).textContent = s.shot;
 }
 
+// Real voice file when the scene has one, the browser's speech otherwise.
+let voicePlayer = null;
+function voiceOf(s) {
+  voicePlayer?.pause();
+  if (s.voiceUrl) { voicePlayer = new Audio(s.voiceUrl); voicePlayer.play().catch(() => {}); }
+  else say(s.lines);
+}
+
 let playback = null;
 function stopPlayback() { playback?.stop(); playback = null; }
 
-// ponytail: demo playback steps through title cards with speech; real clips use <video>, added when the server returns URLs
+// Steps through the scenes: each clip (or title card) with its voice, on one shared clock.
 function play(v, scenes, onEnd) {
   stopPlayback();
   const length = total(scenes);
@@ -185,8 +208,9 @@ function play(v, scenes, onEnd) {
   const next = () => {
     i++;
     if (i >= scenes.length) return end();
-    showCard(v, scenes[i]);
-    say(scenes[i].lines);
+    const vid = showCard(v, scenes[i]);
+    if (vid) { vid.currentTime = 0; vid.play().catch(() => {}); }
+    voiceOf(scenes[i]);
     timer = setTimeout(next, scenes[i].dur * 1000);
   };
   const frame = () => {
@@ -198,6 +222,8 @@ function play(v, scenes, onEnd) {
   const end = () => {
     clearTimeout(timer); cancelAnimationFrame(raf);
     if ("speechSynthesis" in window) speechSynthesis.cancel();
+    voicePlayer?.pause();
+    $("video", v.frame)?.pause();
     v.meter.hidden = true; v.fill.style.transform = "scaleX(0)";
     v.play.textContent = "Play";
     v.clock.textContent = fmt(length);
@@ -258,7 +284,7 @@ function sceneEl(s) {
     row.children[0].textContent = l.who;
     row.children[1].textContent = l.text;
     row.children[2].setAttribute("aria-label", `Hear ${l.who}'s line`);
-    row.children[2].addEventListener("click", () => say([l]));
+    row.children[2].addEventListener("click", () => (s.voiceUrl ? voiceOf(s) : say([l])));
     lines.append(row);
   });
 
@@ -295,13 +321,13 @@ async function run(btn, s, li, kind) {
   s[kind] = "busy"; paintScene(li, s); renderReel();
   const v = li._view;
   try {
-    if (kind === "voice") await api.makeVoices(s, f.cast);
+    if (kind === "voice") s.voiceUrl = (await api.makeVoices(s, f.cast)).url;
     else {
       if (playback?.v === v) stopPlayback();
       v.meter.hidden = false; v.meter.dataset.burn = "";
-      await api.makeClip(s, (p) => { v.fill.style.transform = `scaleX(${p})`; setReel(s.id, p); });
-      f.movie = null; // a new clip makes the built movie stale
+      s.clipUrl = (await api.makeClip(s, (p) => { v.fill.style.transform = `scaleX(${p})`; setReel(s.id, p); }, f.look)).url;
     }
+    f.movie = null; // a new clip or voice makes the built movie stale
     s[kind] = "done"; delete s.err;
   } catch (err) {
     s[kind] = "error"; s.err = err.message;
@@ -347,7 +373,9 @@ function renderFinal() {
     finalView.play.addEventListener("click", () => (playback?.v === finalView ? stopPlayback() : play(finalView, film().scenes)));
   }
   $("#final-meta").textContent = `${fmt(total(f.scenes))}, ${f.scenes.length} scenes, built ${new Date(f.movie.builtAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`;
-  showCard(finalView, { title: f.title, shot: f.idea });
+  // A built file plays in the browser's own player; demo mode steps through the scenes.
+  showCard(finalView, { title: f.title, shot: f.idea, clipUrl: f.movie.url }, { controls: true });
+  $(".screen__bar", finalView.host).hidden = !!f.movie.url;
   finalView.play.disabled = false;
   finalView.play.setAttribute("aria-label", `Play ${f.title}`);
   finalView.clock.textContent = fmt(total(f.scenes));
@@ -366,7 +394,12 @@ $("#export-btn").addEventListener("click", async (e) => {
   }
   if (f.movie) $("#final").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
 });
-$("#download-btn").addEventListener("click", () => { const u = film().movie?.url; if (u) location.href = u; });
+$("#download-btn").addEventListener("click", () => {
+  const f = film(), u = f.movie?.url;
+  if (!u) return;
+  const a = Object.assign(document.createElement("a"), { href: u, download: `${f.title}.mp4` });
+  a.click();
+});
 
 /* Boot */
 $("#demo-note").hidden = !api.demo;
