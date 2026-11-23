@@ -119,17 +119,19 @@ def user(request: Request):
 # Two lanes: voices are small enough to run beside a video render, so a voice sample never
 # waits behind a 2-minute clip. Scripts, clips and movie builds share the heavy lane.
 JOBS = {}
-LANES = {"heavy": queue.Queue(), "voice": queue.Queue()}
+LANES = {"heavy": queue.PriorityQueue(), "voice": queue.PriorityQueue()}
+SEQ = iter(range(10**12))  # keeps first-come order within a priority
 
-def submit(kind, fn):
+def submit(kind, fn, priority=0):
+    """priority 0 is a person waiting; 1 is background warm-up, which always yields to people."""
     job = {"id": uuid.uuid4().hex[:12], "kind": kind, "state": "queued", "progress": 0.0, "result": None, "error": None, "done": threading.Event()}
     JOBS[job["id"]] = job
-    LANES["voice" if kind == "voice" else "heavy"].put((job, fn))
+    LANES["voice" if kind == "voice" else "heavy"].put((priority, next(SEQ), job, fn))
     return job
 
 def worker(lane):
     while True:
-        job, fn = LANES[lane].get()
+        _, _, job, fn = LANES[lane].get()
         job["state"] = "busy"
         try:
             job["result"] = fn(job)
@@ -182,7 +184,8 @@ def write_script(idea, seconds, look):
                   f"Visual look: {look}.\nFor each scene give a short title, a one-paragraph shot description a video model "
                   f"can render (subject, action, setting, camera, light; no dialogue in it), and at most one or two short spoken "
                   f"lines that fit in {dur} seconds. When a scene has a line, its shot must show that character on camera, "
-                  f"facing us and speaking it; a scene with nobody speaking has no lines. Two to four characters. For each character "
+                  f"facing us and speaking it; a scene with nobody speaking has no lines. Two to four characters, each with a full name (first and last), and lines "
+                  f"that call them by that name. For each character "
                   f"give a one-line look (age, build, face, hair, clothes) and repeat it word for word whenever they appear in a shot. "
                   f"Title the film in five words or fewer.")
         r = post_json(f"{OLLAMA}/api/chat", {"model": LLM, "stream": False, "think": False, "format": SCRIPT_SCHEMA,
@@ -247,6 +250,13 @@ def make_voice(lines, cast):
     for l in lines:
         parts += [speak(l["text"], voice_of.get(l["who"])), torch.zeros(int(SR * 0.3))]
     return save_wav(parts, out)
+
+def warm_voices():
+    """At startup: load the voice models and make a sample of every voice, so Play in the studio is instant.
+    Runs in the voice lane, one voice at a time, behind anything a person asks for."""
+    for v in voices():
+        if not (FILES / f"sample-{slug(v['id'])}.wav").exists():
+            submit("voice", lambda j, vid=v["id"]: voice_sample(vid), priority=1)
 
 def voice_sample(voice):
     out = FILES / f"sample-{slug(voice)}.wav"   # cached: a voice always sounds the same
@@ -704,5 +714,6 @@ if __name__ == "__main__":
     for lane in LANES:
         threading.Thread(target=worker, args=(lane,), daemon=True).start()
     threading.Thread(target=idle_watch, daemon=True).start()
+    warm_voices()
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")), proxy_headers=True, forwarded_allow_ips="*")

@@ -88,6 +88,10 @@
             <span>Character</span>
             <select id="cast-char"></select>
           </label>
+          <label class="field">
+            <span>Name</span>
+            <input type="text" id="cast-name" maxlength="60" autocomplete="off">
+          </label>
           <div class="face">
             <div class="frame frame--face" id="face-frame"><span class="frame__label">No face yet</span></div>
             <div class="face__side">
@@ -136,7 +140,7 @@
           <p class="hint" id="cast-empty" hidden></p>
           <div class="cast__acts">
             <button class="btn btn--secondary" type="button" id="cast-play">Play</button>
-            <button class="btn btn--primary" type="submit" id="cast-save">Save voice</button>
+            <button class="btn btn--primary" type="submit" id="cast-save">Save character</button>
           </div>
           <p class="hint" id="cast-current"></p>
           <button class="btn btn--text cast__clone" type="button" id="clone-open">Clone a voice from a recording</button>

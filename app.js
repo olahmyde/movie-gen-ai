@@ -180,7 +180,7 @@ function renderCast() {
   if (!f.cast.some((c) => c.name === castChar)) castChar = f.cast[0].name;
   const sel = $("#cast-char");
   sel.innerHTML = "";
-  f.cast.forEach((c) => sel.append(new Option(`${c.name}, ${voiceById(c.voice)?.name || "no voice"}`, c.name, false, c.name === castChar)));
+  f.cast.forEach((c) => sel.append(new Option(c.name, c.name, false, c.name === castChar)));
   loadCastFilters();
 }
 const castMember = () => film().cast.find((x) => x.name === castChar);
@@ -195,6 +195,7 @@ function paintFace(c) {
 function loadCastFilters() {
   const c = film().cast.find((x) => x.name === castChar);
   paintFace(c);
+  $("#cast-name").value = c?.name || "";
   $("#cast-look").value = c?.look || "";
   const v = voiceById(c?.voice);
   if (v) {
@@ -218,6 +219,7 @@ function fillVoices(keep) {
     ? "No child voices yet: open voice models don’t include children. Clone one from a recording, with a parent’s permission."
     : "No voice matches. Change the accent, voice or age, or clone one from a recording.";
   sel.disabled = !shown.length;
+  prefetchSample(sel.value); // so Play is instant
   $("#cast-play").disabled = !shown.length;
   $("#cast-save").disabled = !shown.length;
   const c = film().cast.find((x) => x.name === castChar);
@@ -259,23 +261,44 @@ $("#face-upload").addEventListener("change", async (e) => {
   catch (err) { toast(`That photo didn't upload: ${err.message}`); }
   frame.classList.remove("shimmer");
 });
-$("#cast-form").addEventListener("change", (e) => { if (e.target.name?.startsWith("c-")) fillVoices($("#cast-voice").value); });
+$("#cast-form").addEventListener("change", (e) => {
+  if (e.target.name?.startsWith("c-")) fillVoices($("#cast-voice").value);
+  if (e.target.id === "cast-voice") prefetchSample(e.target.value);
+});
 $("#cast-play").addEventListener("click", (e) => hearVoice(e.currentTarget, $("#cast-voice").value));
 $("#cast-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  const c = film().cast.find((x) => x.name === castChar), id = $("#cast-voice").value;
-  if (!c || !id) return;
-  if (c.voice !== id) { c.voice = id; markVoicesStale(c.name); save(); }
-  renderCast();
-  toast(`${c.name} now speaks as ${voiceById(id).name}.`);
+  const f = film(), c = castMember(), id = $("#cast-voice").value;
+  if (!c) return;
+  const name = $("#cast-name").value.trim().replace(/\s+/g, " ");
+  if (!name) { $("#cast-name").focus(); return toast("Give the character a name."); }
+  if (name !== c.name && f.cast.some((x) => x.name.toLowerCase() === name.toLowerCase())) return toast(`There's already a character called ${name}.`);
+  if (name !== c.name) { // the script follows the new name
+    f.scenes.forEach((s) => s.lines.forEach((l) => { if (l.who === c.name) l.who = name; }));
+    c.name = name; castChar = name;
+  }
+  c.look = $("#cast-look").value.trim();
+  if (id && c.voice !== id) { c.voice = id; markVoicesStale(c.name); }
+  save(); renderCast(); renderBoard();
+  toast(`Saved ${c.name}.`);
 });
 
 let voicePlayer = null;
+const samples = new Map(); // voice id -> sample URL (or the pending request)
+function prefetchSample(voice) {
+  if (!voice || samples.has(voice) || api.demo) return;
+  const p = api.voiceSample(voice).then((url) => { samples.set(voice, url); new Audio(url).preload = "auto"; return url; })
+    .catch(() => samples.delete(voice));
+  samples.set(voice, p);
+}
 async function hearVoice(btn, voice) {
   if (!voice || btn.getAttribute("aria-busy") === "true") return;
+  const ready = samples.get(voice);
+  if (typeof ready === "string") { voicePlayer?.pause(); voicePlayer = new Audio(ready); voicePlayer.play().catch(() => {}); return; }
   const done = busy(btn, "Loading");
   try {
-    const url = await api.voiceSample(voice);
+    const url = ready ? await ready : await api.voiceSample(voice);
+    if (url) samples.set(voice, url);
     voicePlayer?.pause();
     if (url) { voicePlayer = new Audio(url); voicePlayer.play().catch(() => {}); }
     else say([{ text: "This is the browser's demo voice, not the real one." }]);
