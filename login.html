@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MovieGenAI</title>
+  <meta name="description" content="A private film studio on your own GPU: write a script, voice it and turn every scene into a clip.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Mona+Sans:wdth,wght@100,400;100,500;125,300&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="login.css">
+</head>
+<body>
+  <header class="top">
+    <div class="container top__in">
+      <a class="mark" href="login.html" aria-label="MovieGenAI home">
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="4" width="20" height="14" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1 8h20M1 14h20M6 4v4M11 4v4M16 4v4M6 14v4M11 14v4M16 14v4" stroke="currentColor" stroke-width="1.5"/></svg>
+        <span>MovieGenAI</span>
+      </a>
+      <nav aria-label="Page">
+        <a href="#how">How it works</a>
+        <a href="#looks">Looks</a>
+        <a href="#cost">Cost</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-h">
+      <video class="hero__video" autoplay muted loop playsinline preload="metadata" poster="assets/hero-poster.jpg" aria-hidden="true">
+        <source src="assets/hero.mp4" type="video/mp4">
+      </video>
+      <div class="container hero__in">
+        <div class="hero__copy">
+          <h1 id="hero-h">Your own film studio.</h1>
+          <p class="lead">Write it, voice it, shoot it. On your own GPU, no credits.</p>
+          <a class="btn btn--secondary" href="#how">See how it works</a>
+        </div>
+
+        <section class="signin" id="signin" aria-labelledby="signin-h">
+          <h2 id="signin-h">Sign in</h2>
+          <form id="signin-form" class="stack" novalidate>
+            <label class="field">
+              <span>Email</span>
+              <input type="email" name="email" autocomplete="username" required>
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input type="password" name="password" autocomplete="current-password" required>
+            </label>
+            <p class="error" id="signin-error" role="alert" hidden></p>
+            <button class="btn btn--primary" type="submit" id="signin-btn">Sign in</button>
+          </form>
+          <p class="note" id="demo-note" hidden>Demo mode: any email and password open the studio.</p>
+        </section>
+      </div>
+    </section>
+
+    <section class="how container" id="how" aria-labelledby="how-h">
+      <h2 id="how-h">One idea in. A finished film out.</h2>
+      <ol class="steps">
+        <li>
+          <figure class="shot"><img src="assets/script-typewriter.jpg" alt="Hands typing on a typewriter under a warm desk lamp" loading="lazy" width="1600" height="1024"></figure>
+          <h3>The script</h3>
+          <p>Describe the film in a sentence. Qwen3 writes the scenes and every character’s lines.</p>
+        </li>
+        <li>
+          <figure class="shot"><img src="assets/voice-mic.jpg" alt="A studio microphone in the dark" loading="lazy" width="1600" height="1142"></figure>
+          <h3>The voices</h3>
+          <p>Give each character a voice. Chatterbox reads their lines with feeling.</p>
+        </li>
+        <li>
+          <figure class="shot"><video src="assets/lighthouse.mp4" poster="assets/lighthouse-poster.jpg" autoplay muted loop playsinline preload="metadata" aria-label="A man walking along a pier towards a lighthouse"></video></figure>
+          <h3>The clips</h3>
+          <p>Wan 2.2 turns every scene into a moving shot, then they’re stitched into one film.</p>
+        </li>
+      </ol>
+
+      <figure class="reel" aria-label="A film’s timeline: three scenes rendered, one rendering">
+        <div class="reel__track">
+          <div class="reel__span" data-done style="--dur: 8"><span>Arrival</span></div>
+          <div class="reel__span" data-done style="--dur: 8"><span>Recognition</span></div>
+          <div class="reel__span" data-done style="--dur: 7"><span>The old question</span></div>
+          <div class="reel__span" data-busy style="--dur: 7"><span>What changed</span></div>
+        </div>
+        <figcaption>The timeline fills as each scene renders: blue when done, amber while the GPU works.</figcaption>
+      </figure>
+    </section>
+
+    <section class="looks" id="looks" aria-labelledby="looks-h">
+      <div class="container">
+        <div class="looks__head">
+          <h2 id="looks-h">Ask for any look.</h2>
+          <p>Four places to start, or describe your own.</p>
+        </div>
+        <ul class="looks__grid">
+          <li><figure><img src="assets/look-natural.jpg" alt="A woman in a meadow at sunset" loading="lazy" width="1600" height="1067"><figcaption>Cinematic, natural light</figcaption></figure></li>
+          <li><figure><img src="assets/look-neon.jpg" alt="A wet city street at night under neon signs" loading="lazy" width="1600" height="900"><figcaption>Night, neon city</figcaption></figure></li>
+          <li><figure><img src="assets/look-documentary.jpg" alt="A fisherman on a boat in black and white" loading="lazy" width="1600" height="900"><figcaption>Documentary, handheld</figcaption></figure></li>
+          <li><figure><img src="assets/look-animated.jpg" alt="A small colourful toy robot" loading="lazy" width="1600" height="1067"><figcaption>Animated, soft 3D</figcaption></figure></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="cost container" id="cost" aria-labelledby="cost-h">
+      <p class="cost__fig" aria-hidden="true">70¢</p>
+      <div class="cost__copy">
+        <h2 id="cost-h">Pay for hours, not credits.</h2>
+        <p>About 70¢ an hour of GPU, and only while it’s switched on. Stop it and the bill stops.</p>
+        <a class="btn btn--primary" href="#signin">Sign in to the studio</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <div class="container">
+      <p class="foot__word">MovieGenAI</p>
+      <p class="foot__line">A private studio for two, running on your own GPU server.</p>
+      <p class="foot__credits">Photographs and footage from Pexels: video by cottonbro studio and dabatepatvideos; photographs by Min An, Nishant Ghosh, Andrea Prochilo, Johannes Plenio, Aleson Padilha and Alexey Demidov. Reference images only, not made with MovieGenAI.</p>
+    </div>
+  </footer>
+
+  <script src="api.js"></script>
+  <script>
+    if (api.session()) location.replace("index.html");
+    document.getElementById("demo-note").hidden = !api.demo;
+    // Respect reduced motion: hold every video on its first frame.
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) document.querySelectorAll("video").forEach((v) => { v.removeAttribute("autoplay"); v.pause(); });
+    const form = document.getElementById("signin-form");
+    const err = document.getElementById("signin-error");
+    const btn = document.getElementById("signin-btn");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = new FormData(form);
+      err.hidden = true;
+      btn.disabled = true; btn.setAttribute("aria-busy", "true"); btn.textContent = "Signing in";
+      try {
+        await api.signIn(String(f.get("email")).trim(), String(f.get("password")));
+        location.replace("index.html");
+      } catch (x) {
+        err.textContent = x.message; err.hidden = false;
+        btn.disabled = false; btn.removeAttribute("aria-busy"); btn.textContent = "Sign in";
+      }
+    });
+  </script>
+</body>
+</html>

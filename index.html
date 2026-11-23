@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MovieGenAI</title>
+  <meta name="description" content="Private studio: idea to script, voices, clips and a finished movie.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Mona+Sans:wdth,wght@100,400;100,500;125,300&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="bar">
+    <a class="mark" href="./" aria-label="MovieGenAI home">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect x="1" y="4" width="20" height="14" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M1 8h20M1 14h20M6 4v4M11 4v4M16 4v4M6 14v4M11 14v4M16 14v4" stroke="currentColor" stroke-width="1.5"/></svg>
+      <span>MovieGenAI</span>
+    </a>
+    <div class="gpu" id="gpu" role="status" aria-live="polite">
+      <span class="gpu__state" id="gpu-state">GPU stopped</span>
+      <span class="gpu__cost num" id="gpu-cost"></span>
+      <button class="btn btn--secondary" id="gpu-toggle" type="button">Start GPU</button>
+      <button class="btn btn--text" id="sign-out" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <p class="demo" id="demo-note" hidden>Demo mode. Scripts, voices and clips are placeholders until the GPU server is connected.</p>
+
+  <main class="studio">
+    <aside class="brief" aria-labelledby="brief-h">
+      <h2 id="brief-h">The idea</h2>
+      <form id="idea-form" class="stack">
+        <label class="field">
+          <span>What happens in it?</span>
+          <textarea id="idea" name="idea" rows="5" required placeholder="Two old friends meet at a night ferry after twenty years. One of them never left town."></textarea>
+        </label>
+        <fieldset class="field">
+          <legend>Length</legend>
+          <div class="seg" role="radiogroup">
+            <label><input type="radio" name="length" value="30" checked><span>30 s</span></label>
+            <label><input type="radio" name="length" value="60"><span>1 min</span></label>
+            <label><input type="radio" name="length" value="120"><span>2 min</span></label>
+          </div>
+        </fieldset>
+        <label class="field">
+          <span>Look</span>
+          <select name="look" id="look">
+            <option>Cinematic, natural light</option>
+            <option>Night, neon city</option>
+            <option>Documentary, handheld</option>
+            <option>Animated, soft 3D</option>
+          </select>
+        </label>
+        <button class="btn btn--primary" type="submit" id="write-btn">Write the script</button>
+        <p class="hint" id="write-hint">Start the GPU to write the script.</p>
+      </form>
+
+      <section class="cast" id="cast" aria-labelledby="cast-h" hidden>
+        <h2 id="cast-h">Cast</h2>
+        <ul class="cast__list" id="cast-list"></ul>
+      </section>
+    </aside>
+
+    <section class="cut" aria-labelledby="cut-h">
+      <div class="films">
+        <label class="films__pick">
+          <span class="visually-hidden">Film</span>
+          <select id="film-select"></select>
+        </label>
+        <button class="btn btn--secondary" id="film-new" type="button">New film</button>
+        <button class="btn btn--text" id="film-delete" type="button">Delete film</button>
+      </div>
+
+      <div class="cut__head">
+        <h1 id="cut-h">New film</h1>
+        <p class="cut__meta num" id="cut-meta"></p>
+      </div>
+
+      <div class="empty" id="empty">
+        <p class="empty__lead">Four steps from an idea to a film you can download.</p>
+        <ol class="steps" id="steps">
+          <li data-step="gpu"><h2>Start the GPU</h2><p>Switch it on in the top bar. It bills by the hour until you stop it.</p></li>
+          <li data-step="script"><h2>Describe the film</h2><p>Write the idea on the left. The script comes back as scenes, with lines for each character.</p></li>
+          <li data-step="clips"><h2>Make voices and clips</h2><p>Pick a voice for each character, then make the voices and a clip for every scene.</p></li>
+          <li data-step="movie"><h2>Build the movie</h2><p>The clips are stitched into one MP4 you can watch here and download.</p></li>
+        </ol>
+      </div>
+
+      <ol class="scenes" id="scenes" aria-busy="false"></ol>
+
+      <section class="final" id="final" aria-labelledby="final-h" hidden>
+        <div class="cut__head">
+          <h2 id="final-h">The movie</h2>
+          <p class="cut__meta num" id="final-meta"></p>
+        </div>
+        <div class="screen screen--wide" id="final-screen"></div>
+        <div class="final__acts">
+          <button class="btn btn--secondary" id="download-btn" type="button">Download MP4</button>
+          <p class="hint" id="download-hint"></p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="reel" aria-label="Timeline">
+    <div class="reel__track" id="reel-track" aria-hidden="true"></div>
+    <div class="reel__foot">
+      <p class="num" id="reel-meta">Nothing on the timeline</p>
+      <button class="btn btn--primary" id="export-btn" type="button" disabled>Build the movie</button>
+    </div>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <template id="screen-tpl">
+    <div class="screen__frame">
+      <div class="screen__empty">No clip yet</div>
+      <div class="screen__card" hidden><p class="screen__title"></p><p class="screen__shot"></p></div>
+      <div class="meter" hidden><span></span></div>
+    </div>
+    <div class="screen__bar">
+      <button class="btn btn--text" type="button" data-play disabled>Play</button>
+      <span class="num muted" data-clock></span>
+    </div>
+  </template>
+
+  <template id="scene-tpl">
+    <li class="scene">
+      <div class="screen" data-screen></div>
+      <div class="scene__body">
+        <div class="scene__title">
+          <h2 data-title></h2>
+          <span class="num muted" data-time></span>
+        </div>
+        <label class="field field--quiet">
+          <span>Shot</span>
+          <textarea rows="3" data-shot></textarea>
+        </label>
+        <ul class="lines" data-lines></ul>
+        <div class="scene__acts">
+          <div class="act">
+            <button class="btn btn--secondary" type="button" data-act="voice">Make voices</button>
+            <p class="status" data-voice-status>Voices not made</p>
+          </div>
+          <div class="act">
+            <button class="btn btn--secondary" type="button" data-act="clip">Make clip</button>
+            <p class="status" data-clip-status>Clip not made</p>
+          </div>
+        </div>
+      </div>
+    </li>
+  </template>
+
+  <script src="api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
