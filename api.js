@@ -31,7 +31,7 @@ const api = (() => {
     for (;;) {
       await wait(every);
       const j = await call(`/api/clip/${id}`);
-      onProgress(j.progress);
+      onProgress(j.progress, j);
       if (j.state === "done") return j.url;
       if (j.state === "error") throw new Error(j.error);
     }
@@ -60,7 +60,7 @@ const api = (() => {
     deleteFilm: (id) => call(`/api/films/${id}`, undefined, "DELETE"),
     writeScript: (o) => call("/api/script", o),
     makeVoices: (scene, cast) => call("/api/voice", { lines: scene.lines, cast }),
-    // extra: { quality, cast, voiceUrl, portraitUrl }; with a voice and a face the server lip-syncs the clip
+    // extra: { quality, cast, voiceUrl, speaker }; with a voice the server lip-syncs the scene's still to it
     async makeClip(scene, onProgress, look, extra = {}) {
       const { id } = await call("/api/clip", { shot: scene.shot, look, seconds: scene.dur, ...extra });
       return { url: await poll(id, onProgress) };

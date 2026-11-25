@@ -295,9 +295,10 @@ NEGATIVE = "blurry, low quality, distorted faces, extra limbs, text, watermark, 
 
 SIZES = {"draft": (832, 480), "final": (1280, 704)}  # draft renders about 3x faster
 
-def wan_workflow(prompt, frames, seed, quality="draft"):
+def wan_workflow(prompt, frames, seed, quality="draft", image_name=None):
+    """Wan 2.2 5B; with image_name the clip starts from that still (image-to-video)."""
     width, height = SIZES.get(quality, SIZES["draft"])
-    return {
+    wf = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "wan2.2_ti2v_5B_fp16.safetensors", "weight_dtype": "default"}},
         "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "type": "wan", "device": "default"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": "wan2.2_vae.safetensors"}},
@@ -311,16 +312,20 @@ def wan_workflow(prompt, frames, seed, quality="draft"):
         "10": {"class_type": "CreateVideo", "inputs": {"images": ["9", 0], "fps": 24}},
         "11": {"class_type": "SaveVideo", "inputs": {"video": ["10", 0], "filename_prefix": "moviegen/clip", "format": "mp4", "codec": "auto"}},
     }
+    if image_name:
+        wf["12"] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+        wf["7"]["inputs"]["start_image"] = ["12", 0]
+    return wf
 
 CLIP_SECONDS_EXPECTED = {"draft": 80, "final": 240}  # ponytail: time-based progress; ComfyUI's websocket would be exact
 
-def run_comfy(job, workflow, expected_s, suffix, retried=False):
-    """Queue a workflow, report time-based progress, and return its first output file ending in suffix."""
+def run_comfy(job, workflow, expected_s, suffix, retried=False, span=(0, 1)):
+    """Queue a workflow, report time-based progress within span, and return its first output file ending in suffix."""
     pid = post_json(f"{COMFY}/prompt", {"prompt": workflow})["prompt_id"]
     t0 = time.time()
     while True:
         time.sleep(2)
-        job["progress"] = min(0.95, (time.time() - t0) / expected_s)
+        job["progress"] = span[0] + (span[1] - span[0]) * min(0.95, (time.time() - t0) / expected_s)
         h = get_json(f"{COMFY}/history/{pid}").get(pid)
         if not h:
             continue
@@ -332,7 +337,7 @@ def run_comfy(job, workflow, expected_s, suffix, retried=False):
                 del _models["chatterbox"]
                 import torch, gc
                 gc.collect(); torch.cuda.empty_cache()
-                return run_comfy(job, workflow, expected_s, suffix, retried=True)
+                return run_comfy(job, workflow, expected_s, suffix, retried=True, span=span)
             raise RuntimeError("The model failed on this one. Try again, or simplify the description.")
         for node in h.get("outputs", {}).values():
             for items in node.values():
@@ -361,7 +366,7 @@ def with_looks(shot, cast):
     return shot + (" " + ". ".join(looks) + "." if looks else "")
 
 # Portraits: Z-Image Turbo, wired as ComfyUI's own template (8 steps, CFG 1).
-def portrait_workflow(prompt, seed):
+def portrait_workflow(prompt, seed, size=(1024, 1024), prefix="portrait"):
     return {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "z_image_turbo_bf16.safetensors", "weight_dtype": "default"}},
         "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_4b.safetensors", "type": "lumina2", "device": "default"}},
@@ -369,11 +374,11 @@ def portrait_workflow(prompt, seed):
         "4": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3}},
         "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
         "6": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
-        "7": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+        "7": {"class_type": "EmptySD3LatentImage", "inputs": {"width": size[0], "height": size[1], "batch_size": 1}},
         "8": {"class_type": "KSampler", "inputs": {"model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["7", 0],
                                                     "seed": seed, "steps": 8, "cfg": 1, "sampler_name": "res_multistep", "scheduler": "simple", "denoise": 1}},
         "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
-        "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": "moviegen/portrait"}},
+        "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": f"moviegen/{prefix}"}},
     }
 
 def make_portrait(job, name, look, film_look):
@@ -424,26 +429,42 @@ def s2v_workflow(prompt, image_name, audio_name, segments, size, seed):
 S2V_SIZES = {"draft": (832, 480), "final": (1280, 720)}
 S2V_SECONDS_PER_SEGMENT = {"draft": 90, "final": 300}
 
-def make_clip(job, shot, look, seconds, quality="draft", cast=(), voice=None, portrait=None):
-    """Lines plus the speaker's face: a lip-synced S2V clip. Otherwise text-to-video with everyone's fixed look."""
-    if voice and portrait:
+KEY_SIZES = {"draft": (1024, 576), "final": (1280, 720)}
+
+def make_keyframe(job, shot, look, cast, speaker, quality, span):
+    """The scene as one still, drawn from the script: Z-Image follows a description far better than the video models."""
+    if FAKE:
+        out = FILES / f"{uuid.uuid4().hex}.png"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=1024x576", "-frames:v", "1", str(out)], check=True)
+        return out
+    prompt = f"{look}. Cinematic film still, wide 16:9 frame. {with_looks(shot, cast)}"
+    if speaker:
+        prompt += f" {speaker} is in the foreground facing the camera, face clearly visible, speaking."
+    prompt += " Realistic, natural skin, film grain, no text."
+    return run_comfy(job, portrait_workflow(prompt, secrets.randbelow(2**32), KEY_SIZES.get(quality, KEY_SIZES["draft"]), "keyframe"), 25, ".png", span=span)
+
+def make_clip(job, shot, look, seconds, quality="draft", cast=(), voice=None, speaker=None):
+    """Every scene starts from a still of the script. With a voice, that still is lip-synced to it; otherwise it is animated."""
+    key = make_keyframe(job, shot, look, cast, speaker if voice else None, quality, (0, 0.2))
+    job["keyframe"] = key
+    if voice:
         if FAKE:
             out = FILES / f"{uuid.uuid4().hex}.mp4"
-            subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc=size=640x352:rate=16:duration={seconds}", "-i", str(voice),
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-loop", "1", "-i", str(key), "-i", str(voice), "-vf", "scale=640:360",
                             "-shortest", "-pix_fmt", "yuv420p", str(out)], check=True)
             return out
         segments = max(1, min(4, math.ceil(audio_seconds(voice) / (S2V_SEG / 16))))
-        wf = s2v_workflow(f"{look}. {with_looks(shot, cast)} The character speaks to the camera, lips moving with the words.",
-                          to_comfy_input(portrait), to_comfy_input(voice), segments, S2V_SIZES.get(quality, S2V_SIZES["draft"]), secrets.randbelow(2**31))
-        return run_comfy(job, wf, S2V_SECONDS_PER_SEGMENT.get(quality, 90) * segments, ".mp4")
+        wf = s2v_workflow(f"{look}. {with_looks(shot, cast)} {speaker or 'The character'} speaks to the camera, lips moving with the words.",
+                          to_comfy_input(key), to_comfy_input(voice), segments, S2V_SIZES.get(quality, S2V_SIZES["draft"]), secrets.randbelow(2**31))
+        return run_comfy(job, wf, S2V_SECONDS_PER_SEGMENT.get(quality, 90) * segments, ".mp4", span=(0.2, 1))
     frames = min(121, int(seconds * 24) + 1)
     if FAKE:
         out = FILES / f"{uuid.uuid4().hex}.mp4"
         subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc=size=640x352:rate=24:duration={seconds}",
                         "-pix_fmt", "yuv420p", str(out)], check=True)
         return out
-    wf = wan_workflow(f"{look}. {with_looks(shot, cast)}", frames, secrets.randbelow(2**32), quality)
-    return run_comfy(job, wf, CLIP_SECONDS_EXPECTED.get(quality, 80), ".mp4")
+    wf = wan_workflow(f"{look}. {with_looks(shot, cast)}", frames, secrets.randbelow(2**32), quality, to_comfy_input(key))
+    return run_comfy(job, wf, CLIP_SECONDS_EXPECTED.get(quality, 80), ".mp4", span=(0.2, 1))
 
 
 # ---------- the movie (ffmpeg) ----------
@@ -654,10 +675,11 @@ def clip(body: dict, request: Request):
     quality = "final" if body.get("quality") == "final" else "draft"
     cast = [{"name": str(c.get("name", ""))[:60], "look": str(c.get("look", ""))[:300]} for c in body.get("cast", [])[:6]]
     try:
-        voice, portrait = file_of(body.get("voiceUrl")), file_of(body.get("portraitUrl"))
+        voice = file_of(body.get("voiceUrl"))
     except ValueError as e:
         raise HTTPException(400, str(e))
-    job = submit("clip", lambda j: make_clip(j, shot, look, seconds, quality, cast, voice, portrait))
+    speaker = str(body.get("speaker", ""))[:60] or None
+    job = submit("clip", lambda j: make_clip(j, shot, look, seconds, quality, cast, voice, speaker))
     return {"id": job["id"]}
 
 @app.post("/api/portrait")
@@ -695,7 +717,8 @@ def clip_status(job_id: str, request: Request):
     j = JOBS.get(job_id)
     if not j:
         raise HTTPException(404, "That render isn't known here. The server may have restarted; make the clip again.")
-    return {"state": j["state"], "progress": j["progress"], "error": j["error"], "url": url_of(j["result"]) if j["result"] else None}
+    return {"state": j["state"], "progress": j["progress"], "error": j["error"], "url": url_of(j["result"]) if j["result"] else None,
+            "keyframe": url_of(j["keyframe"]) if j.get("keyframe") else None}
 
 @app.post("/api/movie")
 def movie(body: dict, request: Request):

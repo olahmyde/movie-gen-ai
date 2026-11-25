@@ -91,7 +91,7 @@ try:
     body = f'--{b}\r\nContent-Disposition: form-data; name="file"; filename="f.png"\r\nContent-Type: image/png\r\n\r\n'.encode() + png + f"\r\n--{b}--\r\n".encode()
     s, up = req("/api/portrait/upload", body, f"multipart/form-data; boundary={b}")
     assert s == 200 and up["url"].endswith(".png"), up
-    assert req("/api/clip", {"shot": "x", "seconds": 3, "portraitUrl": "/files/../users.json"})[0] == 400, "files are checked"
+    assert req("/api/clip", {"shot": "x", "seconds": 3, "voiceUrl": "/files/../users.json"})[0] == 400, "files are checked"
 
     s, film = req("/api/script", {"idea": "A keeper finds a letter.", "seconds": 12, "look": "Night"})
     assert s == 200 and len(film["scenes"]) == 3 and film["scenes"][1]["start"] == film["scenes"][0]["dur"], film
@@ -100,14 +100,14 @@ try:
         s, v = req("/api/voice", {"lines": sc["lines"], "cast": film["cast"]})
         assert s == 200 and v["url"].endswith(".wav"), v
         sc["voiceUrl"] = v["url"]
-        lip = sc is film["scenes"][0]  # the first scene lip-syncs with Jack's face
+        lip = sc is film["scenes"][0]  # the first scene lip-syncs its keyframe to the voice
         s, j = req("/api/clip", {"shot": sc["shot"], "look": "Night", "seconds": sc["dur"], "cast": film["cast"],
-                                 **({"voiceUrl": sc["voiceUrl"], "portraitUrl": face_url} if lip else {})})
+                                 **({"voiceUrl": sc["voiceUrl"], "speaker": "Ada"} if lip else {})})
         while True:
             s, st = req(f"/api/clip/{j['id']}")
             if st["state"] in ("done", "error"): break
             time.sleep(0.3)
-        assert st["state"] == "done", st
+        assert st["state"] == "done" and st["keyframe"].endswith(".png"), st
         sc["clipUrl"] = st["url"]
 
     s, m = req("/api/movie", {"scenes": [{"clipUrl": x["clipUrl"], "voiceUrl": x["voiceUrl"]} for x in film["scenes"]]})

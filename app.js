@@ -349,6 +349,8 @@ function paintFrame(frame, s, { controls = false } = {}) {
   frame.classList.toggle("shimmer", s.clip === "busy");
   const label = $(".frame__label", frame);
   $(".shot__face", frame)?.remove();
+  $(".frame__still", frame)?.remove();
+  if (s.clip !== "done" && s.still) frame.prepend(Object.assign(document.createElement("img"), { className: "frame__still", src: s.still, alt: "" }));
   if (s.clip !== "done" && s.face) frame.append(Object.assign(document.createElement("img"), { className: "shot__face", src: s.face, alt: "" }));
   if (s.clip === "done" && s.clipUrl) {
     if (!vid) { vid = Object.assign(document.createElement("video"), { playsInline: true, preload: "metadata" }); frame.prepend(vid); }
@@ -523,22 +525,24 @@ async function runTask(s, kind) {
       if (s.lipsync && s.clip === "done") { s.clip = "none"; delete s.clipUrl; delete s.lipsync; }
     }
     else {
-      const onProgress = (p) => {
+      delete s.still;
+      const onProgress = (p, j) => {
+        if (j?.keyframe && s.still !== j.keyframe) { s.still = j.keyframe; renderBoard(); }  // the scene's still, while it animates
         setReel(s.id, p);
         const card = $(`.shot[data-id="${s.id}"] [data-frame]`);
         if (card) setBar(card, p);
         if (sheetId === s.id) setBar($("#sd-frame"), p);
       };
-      const speaker = f.cast.find((c) => c.name === s.lines[0]?.who);
-      if (speaker?.portrait && s.voice !== "done" && s.lines.length) {
+      if (s.lines.length && s.voice !== "done") {
         s.clip = "none"; await runTask(s, "voice"); s.clip = "busy"; renderBoard();  // lip-sync needs the voice first
+        if (s.voice !== "done") throw new Error(s.err || "The voice failed, so the clip can't be lip-synced. Try again.");
       }
-      const lipsync = !!(speaker?.portrait && s.voice === "done" && s.voiceUrl);
+      const lipsync = !!(s.lines.length && s.voiceUrl);
       s.clipUrl = (await api.makeClip(s, onProgress, f.look, {
         quality: f.quality || "draft",
         cast: f.cast.map((c) => ({ name: c.name, look: c.look || "" })),
         voiceUrl: lipsync ? s.voiceUrl : undefined,
-        portraitUrl: lipsync ? speaker.portrait : undefined,
+        speaker: lipsync ? s.lines[0].who : undefined,
       })).url;
       s.lipsync = lipsync;
     }
